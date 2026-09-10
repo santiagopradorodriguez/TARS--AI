@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import re
 import os
 import sys
 import json
@@ -259,11 +260,58 @@ async def handle_audio(request):
         print(f"[TARS Web] Error en endpoint de audio: {e}")
         return web.json_response({"reply": f"Error procesando audio: {e}"}, status=500)
 
+
+TRANSCRIPT_PATH = "/home/santiago/.gemini/antigravity/brain/02625e27-4d6d-4e62-bf4b-64dd80390943/.system_generated/logs/transcript.jsonl"
+
+async def handle_sync(request):
+    last_idx = int(request.query.get("last_index", 0))
+    latest_msg = ""
+    latest_idx = 0
+    media = []
+
+    if os.path.exists(TRANSCRIPT_PATH):
+        try:
+            with open(TRANSCRIPT_PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        d = json.loads(line)
+                        if d.get("type") == "PLANNER_RESPONSE" and d.get("source") == "MODEL" and d.get("content"):
+                            latest_msg = d.get("content")
+                            latest_idx = d.get("step_index", 0)
+                    except:
+                        pass
+        except Exception as e:
+            print(f"[TARS Web] Error leyendo transcript: {e}")
+
+    if latest_idx > last_idx and latest_msg:
+        # Extraer imagenes si las hay
+        img_matches = re.findall(r'(/[\w\-./]+\.(?:png|jpg|jpeg|gif))', latest_msg)
+        for img_path in img_matches:
+            if os.path.exists(img_path):
+                img_name = os.path.basename(img_path)
+                dest = os.path.join(MEDIA_DIR, img_name)
+                if not os.path.exists(dest):
+                    subprocess.run(["cp", img_path, dest])
+                media.append({"type": "image", "url": f"/media/{img_name}", "name": img_name})
+
+        # Generar TTS de la respuesta
+        audio_url = await generate_tts_file(latest_msg[:400])
+        return web.json_response({
+            "has_new": True,
+            "step_index": latest_idx,
+            "content": latest_msg,
+            "media": media,
+            "audio_url": audio_url
+        })
+
+    return web.json_response({"has_new": False, "step_index": latest_idx})
+
 def init_app():
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/api/audio", handle_audio)
+    app.router.add_get("/api/sync", handle_sync)
     app.router.add_static("/static/", STATIC_DIR)
     app.router.add_static("/media/", MEDIA_DIR)
     return app

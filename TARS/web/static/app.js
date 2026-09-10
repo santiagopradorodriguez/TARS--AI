@@ -188,3 +188,25 @@ textInput.addEventListener('keydown', (e) => {
         sendTextMessage(textInput.value);
     }
 });
+
+// Sincronizacion en tiempo real con la sesion activa de Antigravity
+let currentSyncIndex = 0;
+
+async function syncWithAntigravity() {
+    try {
+        const resp = await fetch(`/api/sync?last_index=${currentSyncIndex}`);
+        const data = await resp.json();
+        if (data.has_new && data.step_index > currentSyncIndex) {
+            currentSyncIndex = data.step_index;
+            appendMessage('assistant', data.content, data.media, data.audio_url);
+        } else if (data.step_index && currentSyncIndex === 0) {
+            // Inicializar al ultimo indice para no duplicar historico viejo
+            currentSyncIndex = data.step_index;
+        }
+    } catch (e) {
+        // Silencioso ante breves desconexiones
+    }
+}
+
+setInterval(syncWithAntigravity, 1500);
+syncWithAntigravity();
