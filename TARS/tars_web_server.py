@@ -75,6 +75,25 @@ def transcribe_wav(wav_path):
         print(f"[TARS Web] Error transcribiendo audio: {e}")
         return ""
 
+
+def query_antigravity(prompt_text):
+    print(f"[TARS Web] Consultando a Antigravity: {prompt_text}")
+    try:
+        cmd = [
+            "/home/santiago/.local/bin/agy",
+            "--dangerously-skip-permissions",
+            "-p",
+            f"El usuario te consulta desde su celular en la red local. Responde de forma concisa, en espanol rioplatense y directa (sin introducciones de relleno). Si creas o buscas archivos, indica la ruta. Consulta: {prompt_text}"
+        ]
+        result = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, timeout=90)
+        return result.strip()
+    except subprocess.TimeoutExpired:
+        return "La consulta en Antigravity tomo demasiado tiempo. Intenta con algo mas puntual."
+    except subprocess.CalledProcessError as e:
+        return f"Error ejecutando en Antigravity: {e.output[:150]}"
+    except Exception as e:
+        return f"No pude conectar con el cerebro de Antigravity: {e}"
+
 def execute_pc_task(command_text):
     cmd_lower = command_text.lower().strip()
     reply = ""
@@ -151,8 +170,21 @@ def execute_pc_task(command_text):
     if "estado" in cmd_lower or "como estas" in cmd_lower:
         return "Todos los sistemas de TARS estan en linea. Puedo controlar Spotify, tomar capturas de pantalla, crear archivos y abrir programas.", media
 
-    # Respuesta por defecto
-    return f"Recibido: '{command_text}'. Orden procesada en la estacion principal.", media
+    # Consultar directamente al cerebro de Antigravity para todo lo demas
+    ai_reply = query_antigravity(command_text)
+    
+    # Detectar si Antigravity genero o menciono alguna imagen local
+    import re
+    img_matches = re.findall(r'(/[\w\-./]+\.(?:png|jpg|jpeg|gif))', ai_reply)
+    for img_path in img_matches:
+        if os.path.exists(img_path):
+            img_name = os.path.basename(img_path)
+            dest = os.path.join(MEDIA_DIR, img_name)
+            if not os.path.exists(dest):
+                subprocess.run(["cp", img_path, dest])
+            media.append({"type": "image", "url": f"/media/{img_name}", "name": img_name})
+
+    return ai_reply, media
 
 # Handlers HTTP
 async def handle_index(request):
