@@ -12,7 +12,13 @@ RECORD_START_TONE = "/home/santiago/.gemini/config/tars_record_start.wav"
 RECORD_END_TONE = "/home/santiago/.gemini/config/tars_record_end.wav"
 CHIME_FILE = "/home/santiago/.gemini/config/gemini_chime.wav"
 DICTATING_LOCK = "/tmp/tars_dictating.lock"
+CHATGPT_DICTATING_LOCK = "/tmp/chatgpt_dictating.lock"
 SPEAKING_LOCK = "/tmp/tars_speaking.lock"
+CHATGPT_VOICE_WAV = "/tmp/chatgpt_voice.wav"
+PYTHON_WHISPER = "/home/santiago/repositorios/CosmicGenerator/venv/bin/python3"
+
+tap_times = []
+tap_lock = threading.Lock()
 
 def play_sound(path, fallback=CHIME_FILE):
     target = path if os.path.exists(path) else fallback
@@ -24,9 +30,7 @@ def get_mode():
         if os.path.exists(STATE_FILE):
             with open(STATE_FILE, "r") as f:
                 data = json.load(f)
-                if "mode" in data:
-                    return data["mode"]
-                return "auto" if data.get("enabled", True) else "off"
+                return data.get("mode", "auto")
     except Exception:
         pass
     return "auto"
@@ -45,13 +49,21 @@ def set_mode(mode):
     
     os.system(f'notify-send "TARS" "{msg}" -t 2000')
 
-key_pressed_time = None
-long_press_triggered = False
-press_lock = threading.Lock()
-
 def is_target_key(key):
     vk = getattr(key, 'vk', None)
     return key in (keyboard.Key.f12, keyboard.Key.insert) or vk == 269025090 or str(key) == '<269025090>'
+
+def get_active_window():
+    try:
+        out = subprocess.check_output(["xprop", "-root", "_NET_ACTIVE_WINDOW"], text=True)
+        win_id = out.split("#")[-1].strip()
+        if win_id and win_id != "0x0":
+            wm_class = subprocess.check_output(["xprop", "-id", win_id, "WM_CLASS"], text=True).lower()
+            wm_name = subprocess.check_output(["xprop", "-id", win_id, "WM_NAME"], text=True).lower()
+            return wm_class + " " + wm_name
+    except Exception:
+        pass
+    return ""
 
 def send_ctrl_m():
     controller = keyboard.Controller()
@@ -73,8 +85,10 @@ def send_enter():
 
 def stop_all_speech():
     subprocess.run(["pkill", "-9", "-f", "paplay.*antigravity_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["pkill", "-9", "-f", "paplay.*chatgpt_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["pkill", "-9", "-f", "paplay.*wa_msg"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["pkill", "-9", "-f", "ffplay.*antigravity_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["pkill", "-9", "-f", "ffplay.*chatgpt_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["pkill", "-9", "-f", "tars_player.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         if os.path.exists(SPEAKING_LOCK):
@@ -82,83 +96,115 @@ def stop_all_speech():
     except Exception:
         pass
 
-def trigger_short_action():
-    # Detener inmediatamente cualquier reproducción de voz
+def trigger_killswitch():
     stop_all_speech()
-    
-    # Check if we were dictating
     if os.path.exists(DICTATING_LOCK):
-        # We were dictating -> Stop and SEND
         try:
             os.remove(DICTATING_LOCK)
         except Exception:
             pass
-        play_sound(RECORD_END_TONE)
         send_ctrl_m()
-        time.sleep(0.15)
-        send_enter()
-    else:
-        # We were NOT dictating -> Start dictating
-        with open(DICTATING_LOCK, "w") as f:
-            f.write("1")
-        
-        # If in "off", wake up to "button"
-        if get_mode() == "off":
-            set_mode("button")
-            
-        play_sound(RECORD_START_TONE)
-        send_ctrl_m()
-
-def trigger_killswitch():
-    stop_all_speech()
-    try:
-        if os.path.exists(DICTATING_LOCK):
-            os.remove(DICTATING_LOCK)
-    except Exception:
-        pass
-    
+    if os.path.exists(CHATGPT_DICTATING_LOCK):
+        try:
+            os.remove(CHATGPT_DICTATING_LOCK)
+        except Exception:
+            pass
+        subprocess.run(["pkill", "-9", "-f", "arecord.*chatgpt_voice.wav"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     set_mode("off")
     play_sound(CANCEL_TONE)
 
-def monitor_long_press():
-    global long_press_triggered, key_pressed_time
-    time.sleep(4.5)  # 4.5 to 5.0 seconds hold
-    with press_lock:
-        if key_pressed_time is not None:
-            long_press_triggered = True
-            trigger_killswitch()
-
-def on_press(key):
-    global key_pressed_time, long_press_triggered
-    if not is_target_key(key):
-        return
-
-    with press_lock:
-        if key_pressed_time is None:
-            key_pressed_time = time.time()
-            long_press_triggered = False
-            threading.Thread(target=monitor_long_press, daemon=True).start()
-
-def on_release(key):
-    global key_pressed_time, long_press_triggered
-    if not is_target_key(key):
-        return
-
-    with press_lock:
-        if key_pressed_time is not None:
-            duration = time.time() - key_pressed_time
-            key_pressed_time = None
-            if not long_press_triggered and duration < 3.0:
-                trigger_short_action()
-            long_press_triggered = False
-
-def main():
+def process_chatgpt_transcription():
     try:
-        if os.path.exists(DICTATING_LOCK):
-            os.remove(DICTATING_LOCK)
+        script = """
+import whisper, sys
+try:
+    model = whisper.load_model("tiny")
+    res = model.transcribe("/tmp/chatgpt_voice.wav", language="es", fp16=False)
+    text = res.get("text", "").strip()
+    if text:
+        sys.stdout.write(text)
+except Exception:
+    pass
+"""
+        out = subprocess.check_output([PYTHON_WHISPER, "-c", script], text=True).strip()
+        if out:
+            controller = keyboard.Controller()
+            time.sleep(0.05)
+            controller.type(out)
+            time.sleep(0.1)
+            send_enter()
     except Exception:
         pass
-    with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
+
+def trigger_single_action():
+    stop_all_speech()
+    current_mode = get_mode()
+    
+    if current_mode == "off":
+        return
+
+    active_win = get_active_window()
+    is_chatgpt = "chatgpt" in active_win or "codex" in active_win
+
+    if is_chatgpt:
+        # Modo dictado inteligente para ChatGPT
+        if os.path.exists(CHATGPT_DICTATING_LOCK):
+            try:
+                os.remove(CHATGPT_DICTATING_LOCK)
+            except Exception:
+                pass
+            play_sound(RECORD_END_TONE)
+            subprocess.run(["pkill", "-INT", "-f", "arecord.*chatgpt_voice.wav"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.05)
+            threading.Thread(target=process_chatgpt_transcription, daemon=True).start()
+        else:
+            with open(CHATGPT_DICTATING_LOCK, "w") as f:
+                f.write("1")
+            play_sound(RECORD_START_TONE)
+            subprocess.Popen(["arecord", "-D", "default", "-r", "16000", "-c", "1", "-f", "S16_LE", CHATGPT_VOICE_WAV],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        # Modo nativo para Antigravity
+        if os.path.exists(DICTATING_LOCK):
+            try:
+                os.remove(DICTATING_LOCK)
+            except Exception:
+                pass
+            play_sound(RECORD_END_TONE)
+            send_ctrl_m()
+            time.sleep(0.15)
+            send_enter()
+        else:
+            with open(DICTATING_LOCK, "w") as f:
+                f.write("1")
+            play_sound(RECORD_START_TONE)
+            send_ctrl_m()
+
+def on_press(key):
+    if not is_target_key(key):
+        return
+
+    now = time.time()
+    with tap_lock:
+        tap_times.append(now)
+        while tap_times and now - tap_times[0] > 1.2:
+            tap_times.pop(0)
+
+        if len(tap_times) >= 3:
+            tap_times.clear()
+            trigger_killswitch()
+            return
+
+    trigger_single_action()
+
+def main():
+    for lock in [DICTATING_LOCK, CHATGPT_DICTATING_LOCK]:
+        if os.path.exists(lock):
+            try:
+                os.remove(lock)
+            except Exception:
+                pass
+    with keyboard.Listener(on_press=on_press) as listener:
         listener.join()
 
 if __name__ == "__main__":

@@ -2,3 +2,5 @@ venv/
 .env
 __pycache__/
 *.pyc
+TARS/web/media/*.mp3
+TARS/web/media/screen_*.png

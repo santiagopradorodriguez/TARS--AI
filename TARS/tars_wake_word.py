@@ -90,27 +90,34 @@ def handle_wake_and_auto_close(stream, close_recognizer):
             close_recognizer.Reset()
             continue
             
-        data, overflowed = stream.read(2000)
+        data, overflowed = stream.read(4000)
         now = time.time()
         
         if close_recognizer.AcceptWaveform(bytes(data)):
             res = json.loads(close_recognizer.Result())
             words = res.get("text", "").lower().split()
             
-            if any(w in words for w in ["enviar", "cambio"]):
+            if any(w in words for w in ["enviar", "envía", "envia", "cambio", "mandar", "listo"]):
                 action = "send"
                 break
             elif "cancelar" in words:
                 action = "cancel"
                 break
-            elif "apagado" in words or "apagar" in words:
-                action = "off"
-                break
-            elif "botón" in words or "tecla" in words:
-                action = "button"
-                break
+        else:
+            # Detección inmediata si la última palabra hablada es de envío o cancelación
+            pres = json.loads(close_recognizer.PartialResult())
+            pwords = pres.get("partial", "").lower().split()
+            if pwords:
+                last_w = pwords[-1]
+                if last_w in ["enviar", "envía", "envia", "cambio", "mandar"]:
+                    action = "send"
+                    break
+                elif last_w == "cancelar":
+                    action = "cancel"
+                    break
                 
-        if now - start_time > 120.0:
+        # Límite amplio de 10 minutos (600s) para mensajes largos
+        if now - start_time > 600.0:
             action = "timeout"
             break
                 
@@ -126,16 +133,6 @@ def handle_wake_and_auto_close(stream, close_recognizer):
         if os.path.exists(CANCEL_TONE):
             subprocess.Popen(["paplay", CANCEL_TONE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         print("Dictado cancelado.")
-    elif action == "off":
-        if os.path.exists(CANCEL_TONE):
-            subprocess.Popen(["paplay", CANCEL_TONE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        set_mode("off")
-        print("TARS apagado por comando de voz.")
-    elif action == "button":
-        if os.path.exists(CANCEL_TONE):
-            subprocess.Popen(["paplay", CANCEL_TONE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        set_mode("button")
-        print("TARS pasado a modo botón por voz.")
 
 def main():
     vosk.SetLogLevel(-1)

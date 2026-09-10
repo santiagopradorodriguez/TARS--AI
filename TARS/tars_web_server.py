@@ -84,15 +84,18 @@ def transcribe_wav(wav_path):
 
 
 def query_antigravity(prompt_text):
-    print(f"[TARS Web] Consultando a Antigravity: {prompt_text}")
+    print(f"[TARS Web] Consultando a Antigravity (rapido): {prompt_text}")
     try:
         cmd = [
             "/home/santiago/.local/bin/agy",
+            "--model", "gemini-3.8-flash-low",
+            "--effort", "low",
+            "--mode", "accept-edits",
             "--dangerously-skip-permissions",
             "-p",
-            f"El usuario te consulta desde su celular en la red local. Responde de forma concisa, en espanol rioplatense y directa (sin introducciones de relleno). Si creas o buscas archivos, indica la ruta. Consulta: {prompt_text}"
+            f"El usuario te consulta desde su celular en la red local. Responde de forma concisa, en espanol rioplatense y directa (sin introducciones de relleno ni markdown excesivo). Si creas o buscas archivos, indica la ruta. Consulta: {prompt_text}"
         ]
-        result = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, timeout=90)
+        result = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, timeout=45)
         return result.strip()
     except subprocess.TimeoutExpired:
         return "La consulta en Antigravity tomo demasiado tiempo. Intenta con algo mas puntual."
@@ -237,10 +240,13 @@ async def handle_audio(request):
                 f.write(chunk)
 
         # Convertir a WAV 16kHz mono con ffmpeg
-        subprocess.run(["ffmpeg", "-y", "-i", raw_path, "-ar", "16000", "-ac", "1", wav_path],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        await asyncio.to_thread(
+            subprocess.run,
+            ["ffmpeg", "-y", "-i", raw_path, "-ar", "16000", "-ac", "1", wav_path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
+        )
 
-        user_text = transcribe_wav(wav_path)
+        user_text = await asyncio.to_thread(transcribe_wav, wav_path)
         try:
             os.remove(raw_path)
             os.remove(wav_path)
@@ -269,16 +275,21 @@ async def handle_audio(request):
 
 TRANSCRIPT_PATH = "/home/santiago/.gemini/antigravity/brain/02625e27-4d6d-4e62-bf4b-64dd80390943/.system_generated/logs/transcript.jsonl"
 
-async def handle_sync(request):
-    last_idx = int(request.query.get("last_index", 0))
+def get_latest_transcript_message():
     latest_msg = ""
     latest_idx = 0
-    media = []
-
     if os.path.exists(TRANSCRIPT_PATH):
         try:
-            with open(TRANSCRIPT_PATH, "r", encoding="utf-8") as f:
-                for line in f:
+            with open(TRANSCRIPT_PATH, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                size = f.tell()
+                read_size = min(size, 131072)
+                f.seek(size - read_size)
+                chunk = f.read(read_size).decode("utf-8", errors="ignore")
+                lines = chunk.splitlines()
+                if read_size < size and len(lines) > 1:
+                    lines = lines[1:]
+                for line in lines:
                     try:
                         d = json.loads(line)
                         if d.get("type") == "PLANNER_RESPONSE" and d.get("source") == "MODEL" and d.get("content"):
@@ -288,6 +299,14 @@ async def handle_sync(request):
                         pass
         except Exception as e:
             print(f"[TARS Web] Error leyendo transcript: {e}")
+    return latest_idx, latest_msg
+
+
+async def handle_sync(request):
+    last_idx = int(request.query.get("last_index", 0))
+    media = []
+
+    latest_idx, latest_msg = await asyncio.to_thread(get_latest_transcript_message)
 
     if latest_idx > last_idx and latest_msg:
         # Extraer imagenes si las hay
