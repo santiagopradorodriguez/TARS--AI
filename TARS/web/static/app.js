@@ -1,3 +1,17 @@
+
+// Desbloquear audio en movil al primer toque en la pantalla
+let audioUnlocked = false;
+function unlockMobileAudio() {
+    if (!audioUnlocked) {
+        const silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
+        silentAudio.play().then(() => {
+            audioUnlocked = true;
+        }).catch(() => {});
+    }
+}
+document.addEventListener('touchstart', unlockMobileAudio, { passive: true });
+document.addEventListener('click', unlockMobileAudio, { passive: true });
+
 let isRecording = false;
 let mediaRecorder = null;
 let audioChunks = [];
@@ -68,10 +82,11 @@ function appendMessage(sender, text, media = null, audioUrl = null) {
         };
         contentDiv.appendChild(audioBtn);
 
-        // Auto-reproducir si viene de una consulta de voz
-        if (sender === 'assistant' && window.autoPlayAudio) {
-            audio.play().catch(() => {});
-            window.autoPlayAudio = false;
+        // Auto-reproducir por voz automaticamente en el celular
+        if (sender === 'assistant') {
+            audio.play().catch(err => {
+                console.log("Autoplay requiere tocar la pantalla al menos una vez:", err);
+            });
         }
     }
 

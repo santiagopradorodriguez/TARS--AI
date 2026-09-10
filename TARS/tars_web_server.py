@@ -36,7 +36,13 @@ if os.path.exists(VOSK_MODEL_PATH):
         print(f"[TARS Web] Error cargando Vosk: {e}")
 
 async def generate_tts_file(text):
-    clean_text = text.replace("*", "").replace("#", "").replace("`", "")
+    clean_text = re.sub(r'```[\s\S]*?```', ' codigo en pantalla ', text)
+    clean_text = re.sub(r'\[(.*?)\]\([^\)]+\)', r'\1', clean_text)
+    clean_text = re.sub(r'https?://\S+', '', clean_text)
+    clean_text = clean_text.replace("*", "").replace("#", "").replace("`", "").replace(">", "").strip()
+    if len(clean_text) > 450:
+        clean_text = clean_text[:450] + " El resto de la respuesta esta en pantalla."
+
     filename = f"reply_{uuid.uuid4().hex[:8]}.mp3"
     filepath = os.path.join(MEDIA_DIR, filename)
     try:
