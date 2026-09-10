@@ -207,7 +207,7 @@ async def handle_chat(request):
         if not user_text:
             return web.json_response({"reply": "No recibi ningun texto."})
 
-        reply_text, media = execute_pc_task(user_text)
+        reply_text, media = await asyncio.to_thread(execute_pc_task, user_text)
         audio_url = await generate_tts_file(reply_text)
 
         return web.json_response({
@@ -253,7 +253,7 @@ async def handle_audio(request):
             media = []
             audio_url = await generate_tts_file(reply_text)
         else:
-            reply_text, media = execute_pc_task(user_text)
+            reply_text, media = await asyncio.to_thread(execute_pc_task, user_text)
             audio_url = await generate_tts_file(reply_text)
 
         return web.json_response({
