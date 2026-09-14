@@ -23,7 +23,132 @@ const sendBtn = document.getElementById('send-btn');
 const micBtn = document.getElementById('mic-btn');
 const micStatusLabel = document.getElementById('mic-status-label');
 
-function appendMessage(sender, text, media = null, audioUrl = null) {
+// Gestor de Audio Unificado (Pausa / Reanudar / Detener y anti-solapamiento)
+let currentAudio = null;
+let currentAudioBtn = null;
+let currentAudioUrl = null;
+
+const audioControlBar = document.getElementById('audio-control-bar');
+const audioStatusText = document.getElementById('audio-status-text');
+const audioPauseBtn = document.getElementById('audio-pause-btn');
+const audioStopBtn = document.getElementById('audio-stop-btn');
+const pauseIcon = document.getElementById('pause-icon');
+const playIcon = document.getElementById('play-icon');
+
+function stopCurrentAudio() {
+    if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+        currentAudio = null;
+    }
+    if (currentAudioBtn) {
+        currentAudioBtn.classList.remove('playing', 'paused');
+        currentAudioBtn.querySelector('span').innerText = 'Escuchar respuesta';
+        currentAudioBtn = null;
+    }
+    currentAudioUrl = null;
+    if (audioControlBar) {
+        audioControlBar.classList.add('hidden');
+    }
+}
+
+function pauseCurrentAudio() {
+    if (currentAudio && !currentAudio.paused) {
+        currentAudio.pause();
+        if (pauseIcon) pauseIcon.style.display = 'none';
+        if (playIcon) playIcon.style.display = 'inline';
+        if (audioStatusText) audioStatusText.innerText = 'Voz pausada';
+        if (currentAudioBtn) {
+            currentAudioBtn.classList.remove('playing');
+            currentAudioBtn.classList.add('paused');
+            currentAudioBtn.querySelector('span').innerText = 'Reanudar voz';
+        }
+    }
+}
+
+function resumeCurrentAudio() {
+    if (currentAudio && currentAudio.paused) {
+        currentAudio.play().then(() => {
+            if (pauseIcon) pauseIcon.style.display = 'inline';
+            if (playIcon) playIcon.style.display = 'none';
+            if (audioStatusText) audioStatusText.innerText = 'Elena hablando...';
+            if (currentAudioBtn) {
+                currentAudioBtn.classList.remove('paused');
+                currentAudioBtn.classList.add('playing');
+                currentAudioBtn.querySelector('span').innerText = 'Pausar voz';
+            }
+        }).catch(() => {});
+    }
+}
+
+function playAudioUrl(url, sourceBtn = null) {
+    if (!url) return;
+
+    // Si tocamos el boton del audio que ya esta sonando: toggle pausa/reanudar
+    if (currentAudio && currentAudioUrl === url) {
+        if (currentAudio.paused) {
+            resumeCurrentAudio();
+        } else {
+            pauseCurrentAudio();
+        }
+        return;
+    }
+
+    // Detener cualquier audio que estuviera sonando previamente
+    stopCurrentAudio();
+
+    const audio = new Audio(url);
+    currentAudio = audio;
+    currentAudioUrl = url;
+    currentAudioBtn = sourceBtn;
+
+    audio.onended = () => {
+        stopCurrentAudio();
+    };
+
+    audio.onerror = () => {
+        stopCurrentAudio();
+    };
+
+    audio.play().then(() => {
+        if (audioControlBar) {
+            audioControlBar.classList.remove('hidden');
+            if (pauseIcon) pauseIcon.style.display = 'inline';
+            if (playIcon) playIcon.style.display = 'none';
+            if (audioStatusText) audioStatusText.innerText = 'Elena hablando...';
+        }
+        if (sourceBtn) {
+            sourceBtn.classList.remove('paused');
+            sourceBtn.classList.add('playing');
+            sourceBtn.querySelector('span').innerText = 'Pausar voz';
+        }
+    }).catch(err => {
+        console.log("Autoplay requiere tocar la pantalla al menos una vez:", err);
+        stopCurrentAudio();
+    });
+}
+
+if (audioPauseBtn) {
+    audioPauseBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (currentAudio) {
+            if (currentAudio.paused) {
+                resumeCurrentAudio();
+            } else {
+                pauseCurrentAudio();
+            }
+        }
+    });
+}
+
+if (audioStopBtn) {
+    audioStopBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        stopCurrentAudio();
+    });
+}
+
+function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = true) {
     const msgDiv = document.createElement('div');
     msgDiv.className = `message ${sender}`;
 
@@ -76,17 +201,14 @@ function appendMessage(sender, text, media = null, audioUrl = null) {
             </svg>
             <span>Escuchar respuesta</span>
         `;
-        const audio = new Audio(audioUrl);
         audioBtn.onclick = () => {
-            audio.play();
+            playAudioUrl(audioUrl, audioBtn);
         };
         contentDiv.appendChild(audioBtn);
 
-        // Auto-reproducir por voz automaticamente en el celular
-        if (sender === 'assistant') {
-            audio.play().catch(err => {
-                console.log("Autoplay requiere tocar la pantalla al menos una vez:", err);
-            });
+        // Auto-reproducir por voz si corresponde
+        if (sender === 'assistant' && autoPlay) {
+            playAudioUrl(audioUrl, audioBtn);
         }
     }
 
@@ -107,7 +229,13 @@ async function sendTextMessage(text) {
             body: JSON.stringify({ text: text })
         });
         const data = await resp.json();
-        appendMessage('assistant', data.reply || 'Sin respuesta', data.media, data.audio_url);
+        if (data.sent_to_ide) {
+            // El mensaje ya fue inyectado en Antigravity IDE; esperamos la respuesta en vivo via /api/sync
+            micStatusLabel.innerText = 'Antigravity procesando en PC...';
+        } else if (data.reply) {
+            // Respuesta de comando local (Spotify, screenshot, etc.)
+            appendMessage('assistant', data.reply, data.media, data.audio_url);
+        }
     } catch (err) {
         appendMessage('assistant', 'Error de conexion con el servidor local.');
     }
@@ -115,13 +243,12 @@ async function sendTextMessage(text) {
 
 async function sendAudioBlob(blob) {
     appendMessage('user', '[Mensaje de voz enviado]');
-    window.autoPlayAudio = true;
 
     const formData = new FormData();
     formData.append('audio', blob, 'voice.webm');
 
     try {
-        micStatusLabel.innerText = 'Procesando en PC...';
+        micStatusLabel.innerText = 'Transcribiendo...';
         const resp = await fetch('/api/audio', {
             method: 'POST',
             body: formData
@@ -129,17 +256,22 @@ async function sendAudioBlob(blob) {
         const data = await resp.json();
         
         if (data.user_text) {
-            // Reemplazar o actualizar mensaje de usuario si se transcribio
+            // Reemplazar mensaje de usuario con el texto transcripto
             const msgs = document.querySelectorAll('.message.user');
             if (msgs.length > 0) {
                 msgs[msgs.length - 1].querySelector('p').innerText = data.user_text;
             }
         }
 
-        appendMessage('assistant', data.reply || 'Sin respuesta', data.media, data.audio_url);
+        if (data.sent_to_ide) {
+            // Inyectado a Antigravity IDE
+            micStatusLabel.innerText = 'Antigravity procesando en PC...';
+        } else if (data.reply) {
+            appendMessage('assistant', data.reply, data.media, data.audio_url);
+            micStatusLabel.innerText = 'Toca para hablar';
+        }
     } catch (err) {
         appendMessage('assistant', 'Error al procesar el audio en la PC.');
-    } finally {
         micStatusLabel.innerText = 'Toca para hablar';
     }
 }
@@ -213,7 +345,8 @@ async function syncWithAntigravity() {
         const data = await resp.json();
         if (data.has_new && data.step_index > currentSyncIndex) {
             currentSyncIndex = data.step_index;
-            appendMessage('assistant', data.content, data.media, data.audio_url);
+            appendMessage('assistant', data.content, data.media, data.audio_url, true);
+            micStatusLabel.innerText = 'Toca para hablar';
         } else if (data.step_index && currentSyncIndex === 0) {
             // Inicializar al ultimo indice para no duplicar historico viejo
             currentSyncIndex = data.step_index;

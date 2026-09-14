@@ -104,10 +104,68 @@ def query_antigravity(prompt_text):
     except Exception as e:
         return f"No pude conectar con el cerebro de Antigravity: {e}"
 
+
+def send_to_antigravity_ide(text):
+    try:
+        from Xlib import X, display, Xatom
+        import Xlib.protocol.event
+        from pynput import keyboard
+
+        d = display.Display(":0")
+        root = d.screen().root
+        client_list = root.get_full_property(d.intern_atom("_NET_CLIENT_LIST"), Xatom.WINDOW)
+        antigravity_win = None
+        if client_list:
+            for w_id in client_list.value:
+                w = d.create_resource_object("window", w_id)
+                wm_class = w.get_wm_class()
+                if wm_class and any("antigravity" in c.lower() for c in wm_class):
+                    antigravity_win = w_id
+                    break
+
+        if not antigravity_win:
+            print("[TARS Web] Ventana de Antigravity IDE no encontrada en el escritorio.")
+            return False
+
+        # 1. Activar y enfocar la ventana de Antigravity (source=2 para evitar bloqueo de Mutter)
+        data = [2, 0, 0, 0, 0]
+        event = Xlib.protocol.event.ClientMessage(
+            window=antigravity_win,
+            client_type=d.intern_atom("_NET_ACTIVE_WINDOW"),
+            data=(32, data)
+        )
+        root.send_event(event, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
+        d.sync()
+        time.sleep(0.18)
+
+        # 2. Asegurar foco en el input del chat con Ctrl+L
+        controller = keyboard.Controller()
+        controller.press(keyboard.Key.ctrl_l)
+        controller.press('l')
+        time.sleep(0.04)
+        controller.release('l')
+        controller.release(keyboard.Key.ctrl_l)
+        time.sleep(0.08)
+
+        # 3. Escribir el texto y presionar Enter
+        controller.type(text)
+        time.sleep(0.08)
+        controller.press(keyboard.Key.enter)
+        time.sleep(0.04)
+        controller.release(keyboard.Key.enter)
+
+        print(f"[TARS Web] Mensaje inyectado con exito en Antigravity IDE: {text[:50]}")
+        return True
+    except Exception as e:
+        print(f"[TARS Web] Error inyectando texto en Antigravity IDE: {e}")
+        return False
+
+
 def execute_pc_task(command_text):
     cmd_lower = command_text.lower().strip()
     reply = ""
     media = []
+    sent_to_ide = False
 
     # 1. Captura de pantalla
     if "captura" in cmd_lower or "pantalla" in cmd_lower or "screenshot" in cmd_lower:
@@ -122,29 +180,29 @@ def execute_pc_task(command_text):
                 reply = "No se pudo generar la captura de pantalla."
         except Exception as e:
             reply = f"Error tomando captura: {e}"
-        return reply, media
+        return reply, media, sent_to_ide
 
     # 2. Control de Spotify / Multimedia
     if "spotify" in cmd_lower or "musica" in cmd_lower:
         if "pausa" in cmd_lower or "parar" in cmd_lower or "pausar" in cmd_lower:
             subprocess.run(["playerctl", "pause"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return "Reproduccion de Spotify pausada.", media
+            return "Reproduccion de Spotify pausada.", media, sent_to_ide
         elif "play" in cmd_lower or "reanudar" in cmd_lower or "reproducir" in cmd_lower:
             subprocess.run(["playerctl", "play"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return "Reproduciendo musica en Spotify.", media
+            return "Reproduciendo musica en Spotify.", media, sent_to_ide
         elif "siguiente" in cmd_lower or "pasar" in cmd_lower or "proxima" in cmd_lower:
             subprocess.run(["playerctl", "next"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return "Pasando a la siguiente cancion.", media
+            return "Pasando a la siguiente cancion.", media, sent_to_ide
         elif "anterior" in cmd_lower or "previa" in cmd_lower:
             subprocess.run(["playerctl", "previous"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return "Volviendo a la cancion anterior.", media
+            return "Volviendo a la cancion anterior.", media, sent_to_ide
         else:
             try:
                 title = subprocess.check_output(["playerctl", "metadata", "title"], text=True, timeout=2).strip()
                 artist = subprocess.check_output(["playerctl", "metadata", "artist"], text=True, timeout=2).strip()
-                return f"Sonando ahora: {title} de {artist}.", media
+                return f"Sonando ahora: {title} de {artist}.", media, sent_to_ide
             except Exception:
-                return "Spotify no parece estar reproduciendo contenido en este momento.", media
+                return "Spotify no parece estar reproduciendo contenido en este momento.", media, sent_to_ide
 
     # 3. Creacion de archivos / notas
     if "crea un archivo" in cmd_lower or "crear archivo" in cmd_lower or "guardar nota" in cmd_lower:
@@ -165,25 +223,28 @@ def execute_pc_task(command_text):
         target = cmd_lower.replace("abre ", "").replace("abrir ", "").strip()
         if "firefox" in target or "navegador" in target:
             subprocess.Popen(["xdg-open", "https://google.com"])
-            return "Abriendo el navegador Firefox en la PC.", media
+            return "Abriendo el navegador Firefox en la PC.", media, sent_to_ide
         elif "youtube" in target:
             subprocess.Popen(["xdg-open", "https://youtube.com"])
-            return "Abriendo YouTube en la PC.", media
+            return "Abriendo YouTube en la PC.", media, sent_to_ide
         elif "terminal" in target:
             subprocess.Popen(["gnome-terminal"])
-            return "Abriendo una terminal en la PC.", media
+            return "Abriendo una terminal en la PC.", media, sent_to_ide
         else:
             subprocess.Popen(["xdg-open", target])
-            return f"Lanzando {target} en la PC.", media
+            return f"Lanzando {target} en la PC.", media, sent_to_ide
 
     # 5. Estado general de la maquina
     if "estado" in cmd_lower or "como estas" in cmd_lower:
-        return "Todos los sistemas de TARS estan en linea. Puedo controlar Spotify, tomar capturas de pantalla, crear archivos y abrir programas.", media
+        return "Todos los sistemas de TARS estan en linea. Puedo controlar Spotify, tomar capturas de pantalla, crear archivos y abrir programas.", media, sent_to_ide
 
-    # Consultar directamente al cerebro de Antigravity para todo lo demas
+    # 6. Para todo lo demas: Inyectar directamente a esta ventana activa de Antigravity IDE
+    if send_to_antigravity_ide(command_text):
+        sent_to_ide = True
+        return "Mensaje enviado a Antigravity en la computadora.", media, sent_to_ide
+
+    # Fallback si Antigravity IDE no esta abierto en el escritorio
     ai_reply = query_antigravity(command_text)
-    
-    # Detectar si Antigravity genero o menciono alguna imagen local
     import re
     img_matches = re.findall(r'(/[\w\-./]+\.(?:png|jpg|jpeg|gif))', ai_reply)
     for img_path in img_matches:
@@ -194,7 +255,7 @@ def execute_pc_task(command_text):
                 subprocess.run(["cp", img_path, dest])
             media.append({"type": "image", "url": f"/media/{img_name}", "name": img_name})
 
-    return ai_reply, media
+    return ai_reply, media, sent_to_ide
 
 # Handlers HTTP
 async def handle_index(request):
@@ -210,9 +271,14 @@ async def handle_chat(request):
         if not user_text:
             return web.json_response({"reply": "No recibi ningun texto."})
 
-        reply_text, media = await asyncio.to_thread(execute_pc_task, user_text)
-        audio_url = await generate_tts_file(reply_text)
+        reply_text, media, sent_to_ide = await asyncio.to_thread(execute_pc_task, user_text)
+        if sent_to_ide:
+            return web.json_response({
+                "sent_to_ide": True,
+                "user_text": user_text
+            })
 
+        audio_url = await generate_tts_file(reply_text)
         return web.json_response({
             "reply": reply_text,
             "media": media,
@@ -258,32 +324,61 @@ async def handle_audio(request):
             reply_text = "No pude entender con claridad el audio. Intenta hablar mas cerca del microfono."
             media = []
             audio_url = await generate_tts_file(reply_text)
+            return web.json_response({
+                "user_text": user_text,
+                "reply": reply_text,
+                "media": media,
+                "audio_url": audio_url
+            })
         else:
-            reply_text, media = await asyncio.to_thread(execute_pc_task, user_text)
-            audio_url = await generate_tts_file(reply_text)
+            reply_text, media, sent_to_ide = await asyncio.to_thread(execute_pc_task, user_text)
+            if sent_to_ide:
+                return web.json_response({
+                    "sent_to_ide": True,
+                    "user_text": user_text
+                })
 
-        return web.json_response({
-            "user_text": user_text,
-            "reply": reply_text,
-            "media": media,
-            "audio_url": audio_url
-        })
+            audio_url = await generate_tts_file(reply_text)
+            return web.json_response({
+                "user_text": user_text,
+                "reply": reply_text,
+                "media": media,
+                "audio_url": audio_url
+            })
     except Exception as e:
         print(f"[TARS Web] Error en endpoint de audio: {e}")
         return web.json_response({"reply": f"Error procesando audio: {e}"}, status=500)
 
 
-TRANSCRIPT_PATH = "/home/santiago/.gemini/antigravity/brain/02625e27-4d6d-4e62-bf4b-64dd80390943/.system_generated/logs/transcript.jsonl"
+def get_active_transcript_path():
+    brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
+    if not os.path.exists(brain_dir):
+        return ""
+    latest_time = 0
+    latest_path = ""
+    try:
+        for convo in os.listdir(brain_dir):
+            p = os.path.join(brain_dir, convo, ".system_generated", "logs", "transcript.jsonl")
+            if os.path.exists(p):
+                mtime = os.path.getmtime(p)
+                if mtime > latest_time:
+                    latest_time = mtime
+                    latest_path = p
+    except Exception as e:
+        print(f"[TARS Web] Error buscando transcript activo: {e}")
+    return latest_path
+
 
 def get_latest_transcript_message():
     latest_msg = ""
     latest_idx = 0
-    if os.path.exists(TRANSCRIPT_PATH):
+    transcript_path = get_active_transcript_path()
+    if transcript_path and os.path.exists(transcript_path):
         try:
-            with open(TRANSCRIPT_PATH, "rb") as f:
+            with open(transcript_path, "rb") as f:
                 f.seek(0, os.SEEK_END)
                 size = f.tell()
-                read_size = min(size, 131072)
+                read_size = min(size, 1048576)
                 f.seek(size - read_size)
                 chunk = f.read(read_size).decode("utf-8", errors="ignore")
                 lines = chunk.splitlines()
@@ -331,9 +426,16 @@ async def handle_sync(request):
 
     return web.json_response({"has_new": False, "step_index": latest_idx})
 
+async def handle_manifest(request):
+    manifest_path = os.path.join(WEB_DIR, "manifest.json")
+    if os.path.exists(manifest_path):
+        return web.FileResponse(manifest_path, headers={"Content-Type": "application/json"})
+    return web.Response(text="Manifest no encontrado", status=404)
+
 def init_app():
     app = web.Application()
     app.router.add_get("/", handle_index)
+    app.router.add_get("/manifest.json", handle_manifest)
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/api/audio", handle_audio)
     app.router.add_get("/api/sync", handle_sync)

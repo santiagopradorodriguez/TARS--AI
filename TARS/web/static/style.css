@@ -301,3 +301,88 @@ body {
         transform: translateY(0);
     }
 }
+
+/* Barra de Control de Audio Flotante */
+.audio-control-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: linear-gradient(135deg, rgba(30, 35, 48, 0.95), rgba(26, 29, 39, 0.95));
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--accent-blue);
+    animation: slideDown 0.25s ease-out;
+    z-index: 10;
+}
+
+.audio-control-bar.hidden {
+    display: none;
+}
+
+.audio-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-main);
+}
+
+.audio-pulse-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: var(--accent-green);
+    box-shadow: 0 0 6px var(--accent-green);
+    animation: pulseDot 1s infinite alternate;
+}
+
+@keyframes pulseDot {
+    0% { transform: scale(0.8); opacity: 0.6; }
+    100% { transform: scale(1.3); opacity: 1; }
+}
+
+.audio-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.audio-ctrl-btn {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: var(--text-main);
+    border: 1px solid var(--card-border);
+    border-radius: 50%;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 0.2s, transform 0.1s;
+}
+
+.audio-ctrl-btn:active {
+    transform: scale(0.92);
+}
+
+.audio-ctrl-btn.stop {
+    color: var(--accent-red);
+    border-color: rgba(239, 68, 68, 0.4);
+}
+
+.audio-player-btn.playing {
+    background-color: var(--accent-blue);
+    color: #fff;
+}
+
+.audio-player-btn.paused {
+    background-color: #f59e0b;
+    color: #fff;
+}
+
+@keyframes slideDown {
+    from { transform: translateY(-100%); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+

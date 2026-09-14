@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f1117">
     <title>TARS Movil</title>
+    <link rel="manifest" href="/manifest.json">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -17,6 +19,28 @@
                 <span id="connection-status">En linea</span>
             </div>
         </header>
+
+        <div id="audio-control-bar" class="audio-control-bar hidden">
+            <div class="audio-info">
+                <span class="audio-pulse-dot"></span>
+                <span id="audio-status-text">Elena hablando...</span>
+            </div>
+            <div class="audio-actions">
+                <button id="audio-pause-btn" class="audio-ctrl-btn" title="Pausar / Reanudar">
+                    <svg id="pause-icon" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                        <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+                    </svg>
+                    <svg id="play-icon" viewBox="0 0 24 24" width="18" height="18" fill="currentColor" style="display:none;">
+                        <path d="M8 5v14l11-7z"/>
+                    </svg>
+                </button>
+                <button id="audio-stop-btn" class="audio-ctrl-btn stop" title="Detener voz">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                        <path d="M6 6h12v12H6z"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
 
         <main class="chat-container" id="chat-container">
             <div class="message assistant">
