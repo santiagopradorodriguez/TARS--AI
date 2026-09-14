@@ -156,10 +156,22 @@ class TarsTrayApp:
 
         self.menu.addSeparator()
         self.action_exit = QAction("Salir", self.menu)
-        self.action_exit.triggered.connect(self.app.quit)
+        self.action_exit.triggered.connect(self.exit_app)
         self.menu.addAction(self.action_exit)
 
         self.tray.setContextMenu(self.menu)
+
+    def exit_app(self):
+        stop_all_speech()
+        try:
+            subprocess.run(
+                ["systemctl", "--user", "stop", "--no-block", "tars-wake-word.service", "tars-tray.service"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except Exception:
+            pass
+        self.app.quit()
 
     def switch_voice(self, new_voice):
         if self.current_voice != new_voice:
