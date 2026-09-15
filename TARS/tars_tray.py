@@ -162,10 +162,15 @@ class TarsTrayApp:
         self.tray.setContextMenu(self.menu)
 
     def exit_app(self):
+        try:
+            self.tray.hide()
+        except Exception:
+            pass
+        save_mode("off")
         stop_all_speech()
         try:
             subprocess.run(
-                ["systemctl", "--user", "stop", "--no-block", "tars-wake-word.service", "tars-tray.service"],
+                ["systemctl", "--user", "stop", "--no-block", "tars-wake-word.service", "antigravity-f12.service", "tars-tray.service"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
             )
