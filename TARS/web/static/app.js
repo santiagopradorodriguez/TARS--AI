@@ -336,14 +336,150 @@ textInput.addEventListener('keydown', (e) => {
     }
 });
 
+// Selector de Chats de Antigravity
+const chatSelectorBtn = document.getElementById('chat-selector-btn');
+const currentChatTitle = document.getElementById('current-chat-title');
+const chatsModal = document.getElementById('chats-modal');
+const chatsModalOverlay = document.getElementById('chats-modal-overlay');
+const chatsModalClose = document.getElementById('chats-modal-close');
+const chatsList = document.getElementById('chats-list');
+const prevChatBtn = document.getElementById('prev-chat-btn');
+const nextChatBtn = document.getElementById('next-chat-btn');
+let activeChatId = '';
+
+function openChatsModal() {
+    if (!chatsModal) return;
+    chatsModal.classList.remove('hidden');
+    loadChatsList();
+}
+
+function closeChatsModal() {
+    if (!chatsModal) return;
+    chatsModal.classList.add('hidden');
+}
+
+async function loadChatsList() {
+    if (!chatsList) return;
+    chatsList.innerHTML = '<div class="loading-chats">Buscando chats abiertos...</div>';
+    try {
+        const resp = await fetch('/api/chats');
+        const data = await resp.json();
+        const chats = data.chats || [];
+        activeChatId = data.current_id || '';
+
+        if (chats.length === 0) {
+            chatsList.innerHTML = '<div class="empty-chats">No se detectaron chats abiertos</div>';
+            return;
+        }
+
+        chatsList.innerHTML = '';
+        chats.forEach(chat => {
+            const item = document.createElement('div');
+            item.className = `chat-item ${chat.active ? 'active' : ''}`;
+            
+            let badgeHtml = chat.active ? '<span class="chat-item-badge">Activo</span>' : '';
+            item.innerHTML = `
+                <span class="chat-item-title">${chat.title}</span>
+                ${badgeHtml}
+            `;
+
+            if (chat.active && currentChatTitle) {
+                currentChatTitle.innerText = chat.title;
+            }
+
+            item.addEventListener('click', () => {
+                switchAntigravityChat(chat.id);
+            });
+
+            chatsList.appendChild(item);
+        });
+    } catch (err) {
+        chatsList.innerHTML = '<div class="empty-chats">Error conectando con el servidor</div>';
+    }
+}
+
+async function switchAntigravityChat(target) {
+    closeChatsModal();
+    micStatusLabel.innerText = 'Cambiando de chat...';
+    try {
+        const resp = await fetch('/api/switch_chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target: target })
+        });
+        const res = await resp.json();
+        if (res.success) {
+            if (currentChatTitle) {
+                currentChatTitle.innerText = res.title;
+            }
+            if (res.id) {
+                activeChatId = res.id;
+            }
+            currentSyncIndex = 0;
+            appendMessage('assistant', `Cambiado al chat: ${res.title}`, null, null, false);
+            micStatusLabel.innerText = 'Toca para hablar';
+            syncWithAntigravity();
+        } else {
+            alert(`No se pudo cambiar de chat: ${res.error || 'error desconocido'}`);
+            micStatusLabel.innerText = 'Toca para hablar';
+        }
+    } catch (err) {
+        alert('Error comunicando con TARS para cambiar de chat');
+        micStatusLabel.innerText = 'Toca para hablar';
+    }
+}
+
+async function loadInitialChatTitle() {
+    try {
+        const resp = await fetch('/api/chats');
+        const data = await resp.json();
+        activeChatId = data.current_id || '';
+        const chats = data.chats || [];
+        const activeChat = chats.find(c => c.active || c.id === activeChatId);
+        if (activeChat && currentChatTitle) {
+            currentChatTitle.innerText = activeChat.title;
+        }
+    } catch (e) {
+        // Silencioso
+    }
+}
+
+if (chatSelectorBtn) {
+    chatSelectorBtn.addEventListener('click', openChatsModal);
+}
+if (chatsModalClose) {
+    chatsModalClose.addEventListener('click', closeChatsModal);
+}
+if (chatsModalOverlay) {
+    chatsModalOverlay.addEventListener('click', closeChatsModal);
+}
+if (prevChatBtn) {
+    prevChatBtn.addEventListener('click', () => switchAntigravityChat('anterior'));
+}
+if (nextChatBtn) {
+    nextChatBtn.addEventListener('click', () => switchAntigravityChat('siguiente'));
+}
+
 // Sincronizacion en tiempo real con la sesion activa de Antigravity
 let currentSyncIndex = 0;
 
 async function syncWithAntigravity() {
     try {
-        const resp = await fetch(`/api/sync?last_index=${currentSyncIndex}`);
+        const resp = await fetch(`/api/sync?last_index=${currentSyncIndex}&chat_id=${encodeURIComponent(activeChatId)}`);
         const data = await resp.json();
-        if (data.has_new && data.step_index > currentSyncIndex) {
+
+        if (data.chat_id) {
+            activeChatId = data.chat_id;
+        }
+
+        if (data.chat_changed) {
+            // Cambio de chat detectado
+            loadInitialChatTitle();
+            currentSyncIndex = data.step_index;
+            if (data.content) {
+                appendMessage('assistant', data.content, data.media, data.audio_url, false);
+            }
+        } else if (data.has_new && data.step_index > currentSyncIndex) {
             currentSyncIndex = data.step_index;
             appendMessage('assistant', data.content, data.media, data.audio_url, true);
             micStatusLabel.innerText = 'Toca para hablar';
@@ -356,5 +492,6 @@ async function syncWithAntigravity() {
     }
 }
 
+loadInitialChatTitle();
 setInterval(syncWithAntigravity, 1500);
 syncWithAntigravity();

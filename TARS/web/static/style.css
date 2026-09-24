@@ -386,3 +386,212 @@ body {
     to { transform: translateY(0); opacity: 1; }
 }
 
+/* Boton Selector de Chat en Header */
+.chat-selector-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background-color: rgba(255, 255, 255, 0.08);
+    color: var(--text-main);
+    border: 1px solid var(--card-border);
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    max-width: 220px;
+    transition: background-color 0.2s, border-color 0.2s;
+}
+
+.chat-selector-btn:hover, .chat-selector-btn:active {
+    background-color: rgba(255, 255, 255, 0.14);
+    border-color: var(--accent-blue);
+}
+
+.current-chat-title {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 140px;
+}
+
+.chevron-icon {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+/* Modal Selector de Chats */
+.chats-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 100;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    transition: visibility 0.25s, opacity 0.25s;
+}
+
+.chats-modal.hidden {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.chats-modal-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(4px);
+}
+
+.chats-modal-card {
+    position: relative;
+    width: 100%;
+    max-width: 550px;
+    max-height: 80vh;
+    background-color: var(--card-bg);
+    border-top-left-radius: 20px;
+    border-top-right-radius: 20px;
+    border: 1px solid var(--card-border);
+    border-bottom: none;
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.5);
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    animation: slideUpModal 0.25s ease-out;
+    z-index: 101;
+}
+
+@keyframes slideUpModal {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+}
+
+.chats-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.modal-title-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-main);
+}
+
+.modal-title-group h3 {
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.modal-close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+}
+
+.chats-modal-quick-nav {
+    display: flex;
+    gap: 10px;
+    padding: 12px 0;
+}
+
+.quick-nav-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--card-border);
+    color: var(--text-main);
+    padding: 10px;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s;
+}
+
+.quick-nav-btn:active {
+    background-color: var(--accent-blue);
+    border-color: var(--accent-blue);
+}
+
+.chats-list-container {
+    overflow-y: auto;
+    max-height: calc(80vh - 130px);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 4px;
+}
+
+.chat-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background-color: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--card-border);
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s;
+}
+
+.chat-item:active {
+    background-color: rgba(59, 130, 246, 0.15);
+    border-color: var(--accent-blue);
+}
+
+.chat-item.active {
+    background-color: rgba(59, 130, 246, 0.2);
+    border-color: var(--accent-blue);
+}
+
+.chat-item-title {
+    font-size: 0.92rem;
+    font-weight: 500;
+    color: var(--text-main);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-right: 10px;
+}
+
+.chat-item.active .chat-item-title {
+    color: #60a5fa;
+    font-weight: 600;
+}
+
+.chat-item-badge {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background-color: var(--accent-blue);
+    color: #fff;
+    flex-shrink: 0;
+}
+
+.loading-chats, .empty-chats {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 24px 0;
+    font-size: 0.9rem;
+}
+
+

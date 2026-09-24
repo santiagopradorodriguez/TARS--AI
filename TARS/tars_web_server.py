@@ -9,6 +9,8 @@ import ssl
 import wave
 import subprocess
 import asyncio
+import urllib.request
+from websockets.sync.client import connect
 from aiohttp import web
 import edge_tts
 import vosk
@@ -105,6 +107,173 @@ def query_antigravity(prompt_text):
         return f"No pude conectar con el cerebro de Antigravity: {e}"
 
 
+def get_devtools_ws_url():
+    port_file = os.path.expanduser("~/.config/Antigravity/DevToolsActivePort")
+    if not os.path.exists(port_file):
+        return None
+    try:
+        with open(port_file, "r") as f:
+            port = f.readline().strip()
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/json/list")
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            targets = json.loads(resp.read().decode())
+            for t in targets:
+                if t.get("type") == "page" and "127.0.0.1" in t.get("url", ""):
+                    return t.get("webSocketDebuggerUrl")
+    except Exception as e:
+        print(f"[TARS Web] Error obteniendo DevTools WS: {e}")
+    return None
+
+
+def eval_in_antigravity(js_expr):
+    ws_url = get_devtools_ws_url()
+    if not ws_url:
+        return None
+    try:
+        with connect(ws_url, open_timeout=2) as ws:
+            req_id = int(time.time() * 1000) % 100000
+            msg = {
+                "id": req_id,
+                "method": "Runtime.evaluate",
+                "params": {
+                    "expression": js_expr,
+                    "returnByValue": True
+                }
+            }
+            ws.send(json.dumps(msg))
+            res_str = ws.recv(timeout=3)
+            res = json.loads(res_str)
+            result = res.get("result", {}).get("result", {})
+            return result.get("value")
+    except Exception as e:
+        print(f"[TARS Web] Error evaluando en Antigravity via CDP: {e}")
+        return None
+
+
+def get_current_antigravity_convo_id():
+    js = "window.location.pathname.replace('/c/', '').split('?')[0]"
+    val = eval_in_antigravity(js)
+    if val and isinstance(val, str) and len(val) > 10:
+        return val.strip()
+    return None
+
+
+def get_antigravity_chats():
+    js = """
+    (() => {
+        const links = Array.from(document.querySelectorAll('a[href*="/c/"]'));
+        const currentId = window.location.pathname.replace('/c/', '').split('?')[0];
+        const seen = new Set();
+        const chats = [];
+        links.forEach(a => {
+            const href = a.getAttribute('href');
+            const match = href.match(/\\/c\\/([a-f0-9\\-]+)/);
+            if (match && !seen.has(match[1])) {
+                seen.add(match[1]);
+                let title = a.getAttribute('aria-label') || a.innerText.trim().replace(/\\n+/g, ' ');
+                if (!title && a.parentElement) {
+                    title = a.parentElement.innerText.split('\\n')[0].trim();
+                }
+                if (!title) {
+                    title = 'Conversacion ' + match[1].slice(0, 8);
+                }
+                chats.push({
+                    id: match[1],
+                    title: title,
+                    active: match[1] === currentId
+                });
+            }
+        });
+        return { current_id: currentId, chats: chats };
+    })()
+    """
+    res = eval_in_antigravity(js)
+    if isinstance(res, dict):
+        return res
+    return {"current_id": "", "chats": []}
+
+
+def switch_antigravity_chat(target):
+    chats_data = get_antigravity_chats()
+    chats = chats_data.get("chats", [])
+    current_id = chats_data.get("current_id", "")
+
+    if not chats:
+        return {"success": False, "error": "No se encontraron chats disponibles en Antigravity"}
+
+    target_id = None
+    target_title = None
+
+    if target == "siguiente":
+        current_idx = 0
+        for i, c in enumerate(chats):
+            if c["id"] == current_id or c.get("active"):
+                current_idx = i
+                break
+        next_idx = (current_idx + 1) % len(chats)
+        target_id = chats[next_idx]["id"]
+        target_title = chats[next_idx]["title"]
+
+    elif target == "anterior":
+        current_idx = 0
+        for i, c in enumerate(chats):
+            if c["id"] == current_id or c.get("active"):
+                current_idx = i
+                break
+        prev_idx = (current_idx - 1) % len(chats)
+        target_id = chats[prev_idx]["id"]
+        target_title = chats[prev_idx]["title"]
+
+    else:
+        # 1. Coincidencia exacta por ID
+        for c in chats:
+            if c["id"] == target:
+                target_id = c["id"]
+                target_title = c["title"]
+                break
+
+        # 2. Coincidencia por subcadena en el titulo
+        if not target_id:
+            query = target.lower().strip()
+            for c in chats:
+                if query in c["title"].lower():
+                    target_id = c["id"]
+                    target_title = c["title"]
+                    break
+
+        # 3. Coincidencia aproximada de palabras
+        if not target_id:
+            query_words = target.lower().split()
+            for c in chats:
+                t_lower = c["title"].lower()
+                if any(w in t_lower for w in query_words if len(w) > 3):
+                    target_id = c["id"]
+                    target_title = c["title"]
+                    break
+
+    if not target_id:
+        return {"success": False, "error": f"No se encontro ningun chat con '{target}'"}
+
+    # Ejecutar click en el enlace mediante CDP
+    js_click = f"""
+    (() => {{
+        const targetId = "{target_id}";
+        const link = document.querySelector('a[href*="/c/' + targetId + '"]');
+        if (link) {{
+            link.click();
+            const title = link.getAttribute('aria-label') || link.innerText.trim().replace(/\\n+/g, ' ');
+            return {{ success: true, id: targetId, title: title }};
+        }}
+        return {{ success: false, error: "Elemento no hallado en la interfaz" }};
+    }})()
+    """
+    res = eval_in_antigravity(js_click)
+    if isinstance(res, dict) and res.get("success"):
+        return {"success": True, "id": target_id, "title": target_title or res.get("title")}
+
+    return {"success": False, "error": res.get("error") if isinstance(res, dict) else "Error al cambiar chat"}
+
+
 def send_to_antigravity_ide(text):
     try:
         from Xlib import X, display, Xatom
@@ -166,6 +335,46 @@ def execute_pc_task(command_text):
     reply = ""
     media = []
     sent_to_ide = False
+
+    # 0. Control y cambio de chats en Antigravity
+    if "siguiente chat" in cmd_lower or "proximo chat" in cmd_lower or "avanzar chat" in cmd_lower or "otro chat" in cmd_lower:
+        res = switch_antigravity_chat(target="siguiente")
+        if res.get("success"):
+            return f"Cambiado al chat: {res.get('title')}", media, sent_to_ide
+        else:
+            return f"No pude cambiar de chat: {res.get('error', 'desconocido')}", media, sent_to_ide
+
+    if "chat anterior" in cmd_lower or "volver al chat" in cmd_lower or "retroceder chat" in cmd_lower:
+        res = switch_antigravity_chat(target="anterior")
+        if res.get("success"):
+            return f"Cambiado al chat: {res.get('title')}", media, sent_to_ide
+        else:
+            return f"No pude cambiar de chat: {res.get('error', 'desconocido')}", media, sent_to_ide
+
+    if "listar chats" in cmd_lower or "que chats hay" in cmd_lower or "cuales chats" in cmd_lower or "lista de chats" in cmd_lower or "mostrar chats" in cmd_lower:
+        chats_info = get_antigravity_chats()
+        chats = chats_info.get("chats", [])
+        if not chats:
+            return "No encontre chats abiertos en Antigravity.", media, sent_to_ide
+        nombres = [f"- {c['title']}" + (" (activo)" if c.get('active') else "") for c in chats[:6]]
+        total = len(chats)
+        res_text = f"Hay {total} chats en la lista. Primeros:\n" + "\n".join(nombres)
+        return res_text, media, sent_to_ide
+
+    if any(cmd_lower.startswith(p) for p in ["cambiar al chat", "cambiar a chat", "cambiar chat", "ir al chat", "abrir chat", "poner el chat"]):
+        cleaned = cmd_lower
+        for p in ["cambiar al chat de ", "cambiar al chat ", "cambiar a chat ", "cambiar chat a ", "cambiar chat de ", "cambiar chat ", "ir al chat de ", "ir al chat ", "abrir chat de ", "abrir chat ", "poner el chat de ", "poner el chat "]:
+            if cleaned.startswith(p):
+                cleaned = cleaned[len(p):].strip()
+                break
+        if not cleaned or cleaned == "de chat":
+            res = switch_antigravity_chat(target="siguiente")
+        else:
+            res = switch_antigravity_chat(target=cleaned)
+        if res.get("success"):
+            return f"Cambiado al chat: {res.get('title')}", media, sent_to_ide
+        else:
+            return f"No encontre un chat que coincida con '{cleaned}'.", media, sent_to_ide
 
     # 1. Captura de pantalla
     if "captura" in cmd_lower or "pantalla" in cmd_lower or "screenshot" in cmd_lower:
@@ -354,6 +563,17 @@ def get_active_transcript_path():
     brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
     if not os.path.exists(brain_dir):
         return ""
+    # 1. Intentar obtener el ID exacto del chat activo via CDP
+    try:
+        active_id = get_current_antigravity_convo_id()
+        if active_id:
+            p = os.path.join(brain_dir, active_id, ".system_generated", "logs", "transcript.jsonl")
+            if os.path.exists(p):
+                return p
+    except Exception as e:
+        print(f"[TARS Web] Error leyendo id activo via CDP: {e}")
+
+    # 2. Fallback: buscar por mtime
     latest_time = 0
     latest_path = ""
     try:
@@ -365,7 +585,7 @@ def get_active_transcript_path():
                     latest_time = mtime
                     latest_path = p
     except Exception as e:
-        print(f"[TARS Web] Error buscando transcript activo: {e}")
+        print(f"[TARS Web] Error buscando transcript activo por mtime: {e}")
     return latest_path
 
 
@@ -399,11 +619,15 @@ def get_latest_transcript_message():
 
 async def handle_sync(request):
     last_idx = int(request.query.get("last_index", 0))
+    client_chat_id = request.query.get("chat_id", "").strip()
     media = []
+
+    active_id = await asyncio.to_thread(get_current_antigravity_convo_id) or ""
+    chat_changed = bool(client_chat_id and active_id and client_chat_id != active_id)
 
     latest_idx, latest_msg = await asyncio.to_thread(get_latest_transcript_message)
 
-    if latest_idx > last_idx and latest_msg:
+    if chat_changed or (latest_idx > last_idx and latest_msg):
         # Extraer imagenes si las hay
         img_matches = re.findall(r'(/[\w\-./]+\.(?:png|jpg|jpeg|gif))', latest_msg)
         for img_path in img_matches:
@@ -414,17 +638,43 @@ async def handle_sync(request):
                     subprocess.run(["cp", img_path, dest])
                 media.append({"type": "image", "url": f"/media/{img_name}", "name": img_name})
 
-        # Generar TTS de la respuesta
-        audio_url = await generate_tts_file(latest_msg[:400])
+        # Generar TTS solo si no fue cambio de chat
+        audio_url = None
+        if not chat_changed and latest_msg:
+            audio_url = await generate_tts_file(latest_msg[:400])
+
         return web.json_response({
             "has_new": True,
             "step_index": latest_idx,
             "content": latest_msg,
             "media": media,
-            "audio_url": audio_url
+            "audio_url": audio_url,
+            "chat_id": active_id,
+            "chat_changed": chat_changed
         })
 
-    return web.json_response({"has_new": False, "step_index": latest_idx})
+    return web.json_response({
+        "has_new": False,
+        "step_index": latest_idx,
+        "chat_id": active_id,
+        "chat_changed": False
+    })
+
+async def handle_get_chats(request):
+    chats_data = await asyncio.to_thread(get_antigravity_chats)
+    return web.json_response(chats_data)
+
+async def handle_switch_chat(request):
+    try:
+        data = await request.json()
+        target = data.get("target") or data.get("id") or data.get("direction") or ""
+        if not target:
+            return web.json_response({"success": False, "error": "Debe indicar objetivo o direccion"}, status=400)
+
+        result = await asyncio.to_thread(switch_antigravity_chat, target)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
 async def handle_manifest(request):
     manifest_path = os.path.join(WEB_DIR, "manifest.json")
@@ -436,6 +686,8 @@ def init_app():
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/manifest.json", handle_manifest)
+    app.router.add_get("/api/chats", handle_get_chats)
+    app.router.add_post("/api/switch_chat", handle_switch_chat)
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/api/audio", handle_audio)
     app.router.add_get("/api/sync", handle_sync)
