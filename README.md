@@ -128,9 +128,10 @@ Para que el celular vibre y te muestre alertas tipo WhatsApp cuando Antigravity 
 - **Cortar Grabación o Procesamiento (`🛑 Cortar` / `Cortar IA`)**:
   - **Mientras estás grabando un audio**: Tocá el botón rojo **`Cancelar`** al lado del micrófono para descartar el audio sin enviarlo si te equivocaste o hubo ruido.
   - **Si el mensaje salió mal o querés frenar a la IA**: Tocá **`🛑 Cortar`** (al lado del micrófono, debajo de tu mensaje enviado o dentro de la tarjeta azul *"Antigravity pensando..."*). Esto aborta el envío en curso y presiona automáticamente *Cancel (`Ctrl+D`)* en Antigravity IDE para detener el procesamiento al instante.
-- **Control de Voz y Audio**:
-  - **`⏹️ Detener voz`**: Detiene inmediatamente la lectura por voz de Elena en el celular.
-  - **`🔊 PC` / `🔇 PC`**: Activa o silencia los parlantes de la laptop de forma remota (ideal cuando estás fuera de casa y no querés que la PC hable sola).
+- **Control de Voz y Modo Silencioso (`🔊 Voz` / `🔇 Mudo`)**:
+  - **Desde la App (`🔊 Voz` / `🔇 Mudo` arriba)**: Tocá el botón **`🔊 Voz`** para pasarlo a **`🔇 Mudo`** (rojo). Si Elena estaba hablando se calla en el acto, y los próximos mensajes entrarán en silencio (solo texto y vibración) sin hablarte en voz alta cuando estés ocupado o en una reunión.
+  - **Desde la Notificación de Android (`🔇 Silenciar voz`)**: Cada notificación que te llega arriba incluye el botón rápido **`🔇 Silenciar voz`** (o **`🔊 Activar voz`**) para callar o activar la voz sin siquiera abrir la aplicación.
+  - **`🔊 PC` / `🔇 PC`**: Activa o silencia los parlantes de la laptop de forma remota.
 
 ---
 

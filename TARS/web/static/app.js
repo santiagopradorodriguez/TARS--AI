@@ -404,8 +404,8 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
         };
         contentDiv.appendChild(audioBtn);
 
-        // Auto-reproducir por voz si corresponde
-        if (sender === 'assistant' && autoPlay) {
+        // Auto-reproducir por voz si corresponde y la voz en celular no está silenciada
+        if (sender === 'assistant' && autoPlay && !isMobileVoiceMuted) {
             playAudioUrl(audioUrl, audioBtn);
         }
     }
@@ -734,6 +734,74 @@ textInput.addEventListener('keydown', (e) => {
         sendTextMessage(textInput.value);
     }
 });
+
+// Control de Silencio de Voz en el Celular (desde la app y desde la notificación)
+const mobileVoiceToggleBtn = document.getElementById('mobile-voice-toggle-btn');
+const mobileVoiceOnIcon = document.getElementById('mobile-voice-on-icon');
+const mobileVoiceOffIcon = document.getElementById('mobile-voice-off-icon');
+const mobileVoiceLabel = document.getElementById('mobile-voice-label');
+let isMobileVoiceMuted = localStorage.getItem('tars_mobile_voice_muted') === 'true';
+
+function updateMobileVoiceUI(muted) {
+    isMobileVoiceMuted = !!muted;
+    localStorage.setItem('tars_mobile_voice_muted', isMobileVoiceMuted ? 'true' : 'false');
+    if (isMobileVoiceMuted) {
+        stopCurrentAudio();
+    }
+    if (!mobileVoiceToggleBtn) return;
+    if (isMobileVoiceMuted) {
+        mobileVoiceToggleBtn.classList.add('muted');
+        mobileVoiceToggleBtn.title = 'Voz en celular silenciada (toca para activar)';
+        if (mobileVoiceOnIcon) mobileVoiceOnIcon.style.display = 'none';
+        if (mobileVoiceOffIcon) mobileVoiceOffIcon.style.display = 'inline-block';
+        if (mobileVoiceLabel) mobileVoiceLabel.innerText = 'Mudo';
+    } else {
+        mobileVoiceToggleBtn.classList.remove('muted');
+        mobileVoiceToggleBtn.title = 'Silenciar voz en el celular';
+        if (mobileVoiceOnIcon) mobileVoiceOnIcon.style.display = 'inline-block';
+        if (mobileVoiceOffIcon) mobileVoiceOffIcon.style.display = 'none';
+        if (mobileVoiceLabel) mobileVoiceLabel.innerText = 'Voz';
+    }
+}
+updateMobileVoiceUI(isMobileVoiceMuted);
+
+if (mobileVoiceToggleBtn) {
+    mobileVoiceToggleBtn.addEventListener('click', async () => {
+        if (navigator.vibrate) navigator.vibrate(40);
+        const nextMuted = !isMobileVoiceMuted;
+        updateMobileVoiceUI(nextMuted);
+        showWhatsAppToast(
+            nextMuted ? '🔇 Voz del celular desactivada' : '🔊 Voz del celular activada',
+            nextMuted ? 'No te hablaré en voz alta cuando lleguen mensajes.' : 'Volveré a leerte las respuestas por voz.'
+        );
+        try {
+            await fetch('/api/toggle_mobile_voice', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ muted: nextMuted })
+            });
+        } catch (e) {}
+    });
+}
+
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data && event.data.type === 'SET_MOBILE_VOICE_MUTE') {
+            updateMobileVoiceUI(Boolean(event.data.muted));
+        }
+    });
+}
+
+if ('mediaSession' in navigator) {
+    try {
+        navigator.mediaSession.setActionHandler('pause', () => {
+            stopCurrentAudio();
+        });
+        navigator.mediaSession.setActionHandler('stop', () => {
+            stopCurrentAudio();
+        });
+    } catch (e) {}
+}
 
 // Control de Mute Sonido en PC
 const pcSoundToggleBtn = document.getElementById('pc-sound-toggle-btn');
@@ -1130,11 +1198,13 @@ async function triggerPhoneNotification(rawContent, customTitle = null, stepInde
     const body = cleanPreviewText(rawContent);
 
     updateMediaSessionNotification(body);
-    try {
-        const chime = new Audio('/static/wa_notify.wav');
-        chime.volume = 0.85;
-        chime.play().catch(() => {});
-    } catch (e) {}
+    if (!isMobileVoiceMuted) {
+        try {
+            const chime = new Audio('/static/wa_notify.wav');
+            chime.volume = 0.85;
+            chime.play().catch(() => {});
+        } catch (e) {}
+    }
 
     if (navigator.vibrate) {
         navigator.vibrate([300, 120, 300, 120, 400]);
@@ -1154,7 +1224,17 @@ async function triggerPhoneNotification(rawContent, customTitle = null, stepInde
             vibrate: [300, 120, 300, 120, 400],
             requireInteraction: true,
             tag: notifTag,
-            renotify: false
+            renotify: false,
+            actions: [
+                {
+                    action: 'toggle_voice',
+                    title: isMobileVoiceMuted ? '🔊 Activar voz' : '🔇 Silenciar voz'
+                },
+                {
+                    action: 'open',
+                    title: '📱 Abrir TARS'
+                }
+            ]
         };
         try {
             if (swRegistration && swRegistration.showNotification) {
@@ -1272,6 +1352,10 @@ async function syncWithAntigravity() {
 
         if (typeof data.pc_audio_muted === 'boolean' && data.pc_audio_muted !== isPcSoundMuted) {
             updatePcSoundUI(data.pc_audio_muted);
+        }
+
+        if (typeof data.mobile_voice_muted === 'boolean' && data.mobile_voice_muted !== isMobileVoiceMuted) {
+            updateMobileVoiceUI(data.mobile_voice_muted);
         }
 
         if (data.processing_info && data.processing_info.is_processing) {

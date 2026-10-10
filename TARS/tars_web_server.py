@@ -1281,7 +1281,8 @@ async def handle_sync(request):
             "chat_changed": chat_changed,
             "processing_info": proc_info,
             "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
-            "pc_audio_muted": get_pc_sound_muted()
+            "pc_audio_muted": get_pc_sound_muted(),
+            "mobile_voice_muted": get_mobile_voice_muted()
         })
 
     return web.json_response({
@@ -1292,7 +1293,8 @@ async def handle_sync(request):
         "chat_changed": False,
         "processing_info": proc_info,
         "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
-        "pc_audio_muted": get_pc_sound_muted()
+        "pc_audio_muted": get_pc_sound_muted(),
+        "mobile_voice_muted": get_mobile_voice_muted()
     })
 
 TARS_STATE_FILE = "/home/santiago/.gemini/config/tars_state.json"
@@ -1324,6 +1326,47 @@ def set_pc_sound_muted(muted):
     except Exception as e:
         print(f"[TARS Web] Error guardando estado sonido PC: {e}")
         return False
+
+def get_mobile_voice_muted():
+    try:
+        if os.path.exists(TARS_STATE_FILE):
+            with open(TARS_STATE_FILE, "r") as f:
+                data = json.load(f)
+                return bool(data.get("mobile_voice_muted", False))
+    except Exception:
+        pass
+    return False
+
+def set_mobile_voice_muted(muted):
+    try:
+        data = {}
+        if os.path.exists(TARS_STATE_FILE):
+            with open(TARS_STATE_FILE, "r") as f:
+                data = json.load(f)
+        data["mobile_voice_muted"] = bool(muted)
+        with open(TARS_STATE_FILE, "w") as f:
+            json.dump(data, f)
+        return True
+    except Exception as e:
+        print(f"[TARS Web] Error guardando estado voz movil: {e}")
+        return False
+
+async def handle_toggle_mobile_voice(request):
+    try:
+        target_state = None
+        try:
+            body = await request.json()
+            if isinstance(body, dict) and "muted" in body:
+                target_state = bool(body["muted"])
+        except Exception:
+            pass
+        if target_state is None:
+            curr = get_mobile_voice_muted()
+            target_state = not curr
+        await asyncio.to_thread(set_mobile_voice_muted, target_state)
+        return web.json_response({"success": True, "mobile_voice_muted": target_state})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
 async def handle_toggle_pc_sound(request):
     try:
@@ -1513,6 +1556,7 @@ def send_web_push_all(title, body, url="/", tag="tars-msg-latest"):
                 "body": clean_body,
                 "url": url,
                 "tag": tag,
+                "voice_muted": get_mobile_voice_muted(),
                 "ts": int(time.time() * 1000)
             })
             valid_subs = []
@@ -1649,6 +1693,7 @@ def init_app():
     app.router.add_get("/api/models", handle_get_models)
     app.router.add_post("/api/switch_model", handle_switch_model)
     app.router.add_post("/api/toggle_pc_sound", handle_toggle_pc_sound)
+    app.router.add_post("/api/toggle_mobile_voice", handle_toggle_mobile_voice)
     app.router.add_post("/api/test_notify", handle_test_notify)
     app.router.add_post("/api/cancel", handle_cancel)
     app.router.add_post("/api/chat", handle_chat)
