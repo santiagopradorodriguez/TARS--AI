@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0f1117">
     <title>TARS Movil</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/style.css?v=2.9">
+    <link rel="stylesheet" href="/static/style.css?v=3.0">
 </head>
 <body>
     <div class="app-container">
@@ -16,6 +16,15 @@
                 <h1>TARS</h1>
             </div>
             <div class="connection-info">
+                <button id="pc-selector-btn" class="chat-selector-btn pc-selector-btn" title="Elegir qué PC con Antigravity usar">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                        <path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/>
+                    </svg>
+                    <span id="current-pc-title" class="current-chat-title">PC</span>
+                    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" class="chevron-icon">
+                        <path d="M7 10l5 5 5-5z"/>
+                    </svg>
+                </button>
                 <button id="notify-toggle-btn" class="pc-sound-toggle-btn notify-btn" title="Activar notificaciones estilo WhatsApp" aria-label="Notificaciones">
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
                         <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
@@ -141,6 +150,30 @@
         </footer>
     </div>
 
+    <!-- Modal selector de PC (Multi-PC Tailscale / Local) -->
+    <div id="pcs-modal" class="chats-modal hidden">
+        <div class="chats-modal-overlay" id="pcs-modal-overlay"></div>
+        <div class="chats-modal-card">
+            <div class="chats-modal-header">
+                <div class="modal-title-group">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                        <path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/>
+                    </svg>
+                    <h3>Elegir PC con Antigravity</h3>
+                </div>
+                <button id="pcs-modal-close" class="modal-close-btn" title="Cerrar">&times;</button>
+            </div>
+            <div class="chats-list-container" id="pcs-list">
+                <div class="loading-chats">Buscando tus PCs en Tailscale...</div>
+            </div>
+            <div class="add-pc-form">
+                <input type="text" id="custom-pc-name" placeholder="Nombre (ej. PC Escritorio)" autocomplete="off">
+                <input type="text" id="custom-pc-ip" placeholder="IP Tailscale o Local" autocomplete="off">
+                <button id="add-custom-pc-btn" class="quick-nav-btn add-pc-submit-btn">+ Agregar</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal selector de modelos de IA de Antigravity -->
     <div id="models-modal" class="chats-modal hidden">
         <div class="chats-modal-overlay" id="models-modal-overlay"></div>
@@ -189,6 +222,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=3.7"></script>
+    <script src="/static/app.js?v=3.8"></script>
 </body>
 </html>

@@ -160,13 +160,29 @@ Podés alternar qué cerebro usa Antigravity en cualquier momento sin tocar la P
 ---
 
 ### 6. Cambiar entre Conversaciones de Antigravity (`💬 Chat`)
-- **Lista de Chats**: Tocá el botón **`💬 Chat`** arriba a la izquierda para ver todas las conversaciones recientes de Antigravity IDE (con su título e indicador del chat actual). Tocá cualquiera para saltar a esa conversación y cargar su historial en el celular.
-- **Navegación Rápida**: Usá las flechas **`◀`** y **`▶`** a los lados del botón `💬 Chat` para pasar rápidamente al chat anterior o siguiente.
-- **Por Comando de Voz o Texto**: También podés decir o escribir *"cambiá al chat 2"* o *"siguiente chat"*.
+- **Lista de Chats**: Tocá el botón **`💬 Chat`** arriba a la derecha para ver todas las conversaciones recientes de Antigravity IDE (con su título e indicador del chat actual). Tocá cualquiera para saltar a esa conversación y cargar su historial en el celular.
+- **Navegación Rápida**: Usá los botones **`◀ Anterior`** y **`Siguiente ▶`** dentro del panel para pasar rápidamente de un chat a otro.
+- **Por Comando de Voz o Texto**: También podés decir o escribir *"cambiá al chat de..."* o *"siguiente chat"*.
 
 ---
 
-### 7. Comandos Rápidos del Sistema y Uso en PC
+### 7. Elegir qué PC con Antigravity Usar (`💻 PC` Multi-PC en Tailscale)
+Si estás trabajando con dos o más computadoras con Antigravity (por ejemplo **Lenovo Yoga** `100.x.x.a` y **Pop!_OS** `100.x.x.b`):
+
+1. Tocá el botón **`💻 Lenovo Yoga`** (o **`💻 Pop!_OS`**) arriba a la izquierda en la barra superior de TARS.
+2. Se abrirá el panel **"Elegir PC con Antigravity"**, que detecta automáticamente todas tus PCs conectadas a tu red **Tailscale** y verifica en vivo si tienen TARS activo (`🟢 Tailscale • TARS Activo`).
+3. **Tocá la PC que quieras usar**:
+   - Sin cambiar de aplicación ni aceptar certificados nuevos, TARS enruta automáticamente tus mensajes, audios, lista de chats y notificaciones hacia la PC elegida.
+   - Si querés abrir el servidor web de la otra PC en una pestaña directa, también tenés el botón **`↗ Directo`** al lado de cada PC.
+4. **Para actualizar ambas PCs con las últimas mejoras desde GitHub**:
+   En cualquiera de tus PCs, entrá a la carpeta del repositorio y ejecutá:
+   ```bash
+   git pull && chmod +x actualizar_tars.sh && ./actualizar_tars.sh
+   ```
+
+---
+
+### 8. Comandos Rápidos del Sistema y Uso en PC
 Además de conversar con Antigravity, TARS reconoce comandos directos para controlar tu Linux:
 - **Música / Multimedia**: *"Pone música"*, *"Pausa la música"*, *"Siguiente canción"*, *"Subí el volumen"*, *"Bajá el volumen"*.
 - **Capturas de Pantalla de la PC**: *"Sacá una captura de pantalla"* (toma una captura del escritorio de tu PC y te la muestra).

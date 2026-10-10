@@ -1092,6 +1092,181 @@ if (modelsModalOverlay) {
     modelsModalOverlay.addEventListener('click', closeModelsModal);
 }
 
+// ===== SELECTOR MULTI-PC (TAILSCALE / LAN) =====
+const pcSelectorBtn = document.getElementById('pc-selector-btn');
+const currentPcTitle = document.getElementById('current-pc-title');
+const pcsModal = document.getElementById('pcs-modal');
+const pcsModalOverlay = document.getElementById('pcs-modal-overlay');
+const pcsModalClose = document.getElementById('pcs-modal-close');
+const pcsList = document.getElementById('pcs-list');
+const customPcNameInput = document.getElementById('custom-pc-name');
+const customPcIpInput = document.getElementById('custom-pc-ip');
+const addCustomPcBtn = document.getElementById('add-custom-pc-btn');
+
+let activePcId = 'local';
+let activePcName = 'PC';
+
+function updateActivePcUI(pcInfo) {
+    if (!pcInfo) return;
+    activePcId = pcInfo.id || 'local';
+    activePcName = pcInfo.name || 'PC';
+    if (currentPcTitle) {
+        currentPcTitle.innerText = activePcName;
+    }
+    if (pcSelectorBtn) {
+        if (pcInfo.is_local) {
+            pcSelectorBtn.classList.remove('remote-active');
+        } else {
+            pcSelectorBtn.classList.add('remote-active');
+        }
+        pcSelectorBtn.title = `PC activa: ${activePcName} (${pcInfo.ip || 'local'})`;
+    }
+}
+
+function openPcsModal() {
+    if (!pcsModal) return;
+    pcsModal.classList.remove('hidden');
+    loadPcsList();
+}
+
+function closePcsModal() {
+    if (!pcsModal) return;
+    pcsModal.classList.add('hidden');
+}
+
+async function loadPcsList() {
+    if (!pcsList) return;
+    pcsList.innerHTML = '<div class="loading-chats">Buscando tus PCs en Tailscale...</div>';
+    try {
+        const resp = await fetch('/api/pcs');
+        const data = await resp.json();
+        if (data.active_pc) {
+            updateActivePcUI(data.active_pc);
+        }
+        const pcs = data.pcs || [];
+        if (pcs.length === 0) {
+            pcsList.innerHTML = '<div class="empty-chats">No se encontraron PCs</div>';
+            return;
+        }
+        pcsList.innerHTML = '';
+        pcs.forEach(pc => {
+            const card = document.createElement('div');
+            card.className = `pc-item ${pc.active ? 'active' : ''}`;
+
+            const statusDotClass = pc.tars_online ? 'online' : (pc.online ? 'online' : 'offline');
+            const statusLabel = pc.is_local
+                ? 'Esta PC • En línea'
+                : (pc.tars_online ? 'Tailscale • TARS Activo' : (pc.online ? 'Tailscale • En línea' : 'Desconectada'));
+
+            const activeBadge = pc.active
+                ? '<span class="chat-item-badge">Conectada</span>'
+                : '';
+
+            const directLinkHtml = (!pc.is_local && pc.direct_url)
+                ? `<a href="${escapeHtml(pc.direct_url)}" target="_blank" rel="noopener" class="pc-direct-link" onclick="event.stopPropagation()" title="Abrir servidor web de esta PC directo">↗ Directo</a>`
+                : '';
+
+            card.innerHTML = `
+                <div class="pc-item-left">
+                    <div class="pc-item-title-row">
+                        <span class="pc-status-dot ${statusDotClass}"></span>
+                        <span class="pc-item-name">${escapeHtml(pc.name)}</span>
+                    </div>
+                    <div class="pc-item-sub">${escapeHtml(pc.ip)} • ${statusLabel}</div>
+                </div>
+                <div class="pc-item-right">
+                    ${directLinkHtml}
+                    ${activeBadge}
+                </div>
+            `;
+
+            card.addEventListener('click', () => {
+                selectTargetPc(pc);
+            });
+            pcsList.appendChild(card);
+        });
+    } catch (e) {
+        pcsList.innerHTML = '<div class="empty-chats">Error consultando PCs disponibles</div>';
+    }
+}
+
+async function selectTargetPc(pc) {
+    closePcsModal();
+    micStatusLabel.innerText = `Conectando con ${pc.name}...`;
+    try {
+        const resp = await fetch('/api/select_pc', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                id: pc.id,
+                ip: pc.ip,
+                name: pc.name,
+                hostname: pc.hostname
+            })
+        });
+        const res = await resp.json();
+        if (res && res.success) {
+            updateActivePcUI(res.active_pc);
+            if (navigator.vibrate) navigator.vibrate([40, 40, 60]);
+            removeProcessingBubble();
+            renderedStepIndices.clear();
+            currentSyncIndex = 0;
+            activeChatId = '';
+            await loadInitialChatTitle();
+            await syncWithAntigravity();
+            showWhatsAppToast(
+                `💻 Conectado a ${res.active_pc.name}`,
+                `Ahora estás controlando Antigravity en ${res.active_pc.name} (${res.active_pc.ip})`
+            );
+            micStatusLabel.innerText = 'Toca para hablar';
+        }
+    } catch (e) {
+        micStatusLabel.innerText = 'Error cambiando de PC';
+    }
+}
+
+async function addCustomPc() {
+    if (!customPcIpInput) return;
+    const ipVal = customPcIpInput.value.trim();
+    const nameVal = customPcNameInput ? customPcNameInput.value.trim() : '';
+    if (!ipVal) return;
+    try {
+        const resp = await fetch('/api/add_pc', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip: ipVal, name: nameVal })
+        });
+        const data = await resp.json();
+        if (data && data.success) {
+            customPcIpInput.value = '';
+            if (customPcNameInput) customPcNameInput.value = '';
+            if (data.active_pc) {
+                updateActivePcUI(data.active_pc);
+                renderedStepIndices.clear();
+                currentSyncIndex = 0;
+                activeChatId = '';
+                loadInitialChatTitle();
+                syncWithAntigravity();
+            }
+            closePcsModal();
+            showWhatsAppToast(`💻 PC agregada`, `Conectado a ${data.active_pc ? data.active_pc.name : ipVal}`);
+        }
+    } catch (e) {}
+}
+
+if (pcSelectorBtn) {
+    pcSelectorBtn.addEventListener('click', openPcsModal);
+}
+if (pcsModalClose) {
+    pcsModalClose.addEventListener('click', closePcsModal);
+}
+if (pcsModalOverlay) {
+    pcsModalOverlay.addEventListener('click', closePcsModal);
+}
+if (addCustomPcBtn) {
+    addCustomPcBtn.addEventListener('click', addCustomPc);
+}
+
 // ===== SISTEMA DE NOTIFICACIONES PUSH REALES (ESTILO WHATSAPP CON PESTAÑA CERRADA) =====
 const notifyToggleBtn = document.getElementById('notify-toggle-btn');
 const notifyBtnLabel = document.getElementById('notify-btn-label');
@@ -1194,7 +1369,7 @@ if (waToastBanner) {
 
 async function triggerPhoneNotification(rawContent, customTitle = null, stepIndex = null) {
     const chatName = (currentChatTitle && currentChatTitle.innerText) ? currentChatTitle.innerText : 'Antigravity';
-    const title = customTitle || `🤖 TARS • ${chatName}`;
+    const title = customTitle || `🤖 TARS (${activePcName}) • ${chatName}`;
     const body = cleanPreviewText(rawContent);
 
     updateMediaSessionNotification(body);
@@ -1342,6 +1517,10 @@ async function syncWithAntigravity() {
     try {
         const resp = await fetch(`/api/sync?last_index=${currentSyncIndex}&chat_id=${encodeURIComponent(activeChatId)}`);
         const data = await resp.json();
+
+        if (data.active_pc) {
+            updateActivePcUI(data.active_pc);
+        }
 
         if (data.chat_id) {
             activeChatId = data.chat_id;

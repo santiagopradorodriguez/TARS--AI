@@ -980,6 +980,24 @@ async def handle_chat(request):
         if not user_text and not file_paths:
             return web.json_response({"reply": "No recibi ningun texto ni archivo."})
 
+        if is_remote_pc_active():
+            rem_ip = get_active_pc_ip()
+            prompt_to_send = user_text if user_text else "Por favor analizá los archivos adjuntos."
+            rem_res = await asyncio.to_thread(
+                remote_api_request,
+                rem_ip,
+                "/api/chat",
+                method="POST",
+                json_body={"text": prompt_to_send, "chat_id": client_chat_id}
+            )
+            if isinstance(rem_res, dict):
+                if rem_res.get("audio_url"):
+                    await asyncio.to_thread(ensure_remote_media_cached, rem_ip, rem_res["audio_url"])
+                for m in (rem_res.get("media") or []):
+                    if isinstance(m, dict) and m.get("url"):
+                        await asyncio.to_thread(ensure_remote_media_cached, rem_ip, m["url"])
+                return web.json_response(rem_res)
+
         reply_text, media, sent_to_ide = await asyncio.to_thread(
             execute_pc_task,
             user_text,
@@ -1081,6 +1099,24 @@ async def handle_audio(request):
                 "audio_url": audio_url
             })
         else:
+            if is_remote_pc_active():
+                rem_ip = get_active_pc_ip()
+                rem_res = await asyncio.to_thread(
+                    remote_api_request,
+                    rem_ip,
+                    "/api/chat",
+                    method="POST",
+                    json_body={"text": user_text, "chat_id": client_chat_id}
+                )
+                if isinstance(rem_res, dict):
+                    if rem_res.get("audio_url"):
+                        await asyncio.to_thread(ensure_remote_media_cached, rem_ip, rem_res["audio_url"])
+                    for m in (rem_res.get("media") or []):
+                        if isinstance(m, dict) and m.get("url"):
+                            await asyncio.to_thread(ensure_remote_media_cached, rem_ip, m["url"])
+                    rem_res["user_text"] = user_text
+                    return web.json_response(rem_res)
+
             reply_text, media, sent_to_ide = await asyncio.to_thread(
                 execute_pc_task,
                 user_text,
@@ -1149,6 +1185,8 @@ def format_spanish_tool_action(t_name, args):
     elif t_name == "run_command":
         short_cmd = cmd_line.split("&&")[0].strip()[:42] if cmd_line else "comando"
         return f"💻 Ejecutando: {short_cmd}"
+    elif t_name == "list_dir":
+        return "📂 Listando archivos del directorio"
     elif t_name in ("grep_search", "find_by_name"):
         return "🔍 Buscando en el código"
     elif t_name in ("search_web", "read_url_content"):
@@ -1243,10 +1281,66 @@ def get_latest_transcript_message():
     return latest_idx, latest_msg, proc_info
 
 
+_REMOTE_PROC_TRACKER = {}
+
+def enrich_remote_sync_data(rem_ip, rem_data):
+    if not isinstance(rem_data, dict):
+        return rem_data
+    p_info = rem_data.get("processing_info") or {}
+    is_proc = bool(p_info.get("is_processing"))
+
+    # Regla estricta: NUNCA mandar mensajes ni notificaciones intermedias mientras está procesando
+    if is_proc and not rem_data.get("chat_changed"):
+        rem_data["has_new"] = False
+        rem_data.pop("content", None)
+        rem_data.pop("audio_url", None)
+
+    if is_proc:
+        tracker = _REMOTE_PROC_TRACKER.setdefault(rem_ip, {"last_step": 0, "steps_count": 0, "recent_steps": []})
+        t_name = p_info.get("tool_name", "")
+        raw_act = p_info.get("tool_action", "")
+        if "recent_steps" not in p_info:
+            sp_act = format_spanish_tool_action(t_name, {"toolAction": raw_act, "CommandLine": p_info.get("tool_detail", ""), "TargetFile": p_info.get("tool_detail", "")})
+            p_info["tool_action"] = sp_act
+            step_idx = p_info.get("step_index", 0)
+            if step_idx != tracker["last_step"]:
+                tracker["last_step"] = step_idx
+                tracker["steps_count"] += 1
+            if not tracker["recent_steps"] or tracker["recent_steps"][-1] != sp_act:
+                tracker["recent_steps"].append(sp_act)
+                if len(tracker["recent_steps"]) > 5:
+                    tracker["recent_steps"] = tracker["recent_steps"][-5:]
+            p_info["steps_count"] = max(1, tracker["steps_count"])
+            p_info["recent_steps"] = list(tracker["recent_steps"])
+            rem_data["processing_info"] = p_info
+            rem_data["processing_status"] = sp_act
+    else:
+        _REMOTE_PROC_TRACKER.pop(rem_ip, None)
+
+    rem_data["mobile_voice_muted"] = get_mobile_voice_muted()
+    rem_data["active_pc"] = get_active_pc_info()
+    return rem_data
+
+
 async def handle_sync(request):
     last_idx = int(request.query.get("last_index", 0))
     client_chat_id = request.query.get("chat_id", "").strip()
     media = []
+
+    if is_remote_pc_active():
+        import urllib.parse
+        rem_ip = get_active_pc_ip()
+        qs = f"/api/sync?last_index={last_idx}&chat_id={urllib.parse.quote(client_chat_id)}"
+        rem_data = await asyncio.to_thread(remote_api_request, rem_ip, qs, "GET", None, 4.5)
+        if isinstance(rem_data, dict) and not rem_data.get("_proxy_error"):
+            rem_data = enrich_remote_sync_data(rem_ip, rem_data)
+            if rem_data.get("has_new"):
+                if rem_data.get("audio_url"):
+                    await asyncio.to_thread(ensure_remote_media_cached, rem_ip, rem_data["audio_url"])
+                for m in (rem_data.get("media") or []):
+                    if isinstance(m, dict) and m.get("url"):
+                        await asyncio.to_thread(ensure_remote_media_cached, rem_ip, m["url"])
+            return web.json_response(rem_data)
 
     active_id = await asyncio.to_thread(get_current_antigravity_convo_id) or ""
     current_model = await asyncio.to_thread(get_current_antigravity_model) or ""
@@ -1282,7 +1376,8 @@ async def handle_sync(request):
             "processing_info": proc_info,
             "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
             "pc_audio_muted": get_pc_sound_muted(),
-            "mobile_voice_muted": get_mobile_voice_muted()
+            "mobile_voice_muted": get_mobile_voice_muted(),
+            "active_pc": get_active_pc_info()
         })
 
     return web.json_response({
@@ -1294,10 +1389,275 @@ async def handle_sync(request):
         "processing_info": proc_info,
         "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
         "pc_audio_muted": get_pc_sound_muted(),
-        "mobile_voice_muted": get_mobile_voice_muted()
+        "mobile_voice_muted": get_mobile_voice_muted(),
+        "active_pc": get_active_pc_info()
     })
 
 TARS_STATE_FILE = "/home/santiago/.gemini/config/tars_state.json"
+
+def _read_tars_state():
+    try:
+        if os.path.exists(TARS_STATE_FILE):
+            with open(TARS_STATE_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _write_tars_state(updates):
+    try:
+        data = _read_tars_state()
+        data.update(updates)
+        with open(TARS_STATE_FILE, "w") as f:
+            json.dump(data, f)
+        return True
+    except Exception as e:
+        print(f"[TARS Web] Error guardando estado TARS: {e}")
+        return False
+
+def format_friendly_pc_name(hostname, ip=""):
+    h = (hostname or "").strip()
+    hl = h.lower()
+    if "lenovo" in hl or "yoga" in hl:
+        return "Lenovo Yoga"
+    if "pop-os" in hl or "pop_os" in hl:
+        return "Pop!_OS"
+    if h:
+        return h[:18]
+    return ip or "PC Local"
+
+def get_active_pc_ip():
+    st = _read_tars_state()
+    val = str(st.get("active_pc_ip") or "local").strip()
+    return val if val else "local"
+
+def get_active_pc_info():
+    st = _read_tars_state()
+    ip = str(st.get("active_pc_ip") or "local").strip()
+    local_hostname = socket.gethostname()
+    local_friendly = format_friendly_pc_name(local_hostname)
+    if ip == "local" or ip in ("127.0.0.1", "localhost"):
+        return {
+            "id": "local",
+            "ip": get_tailscale_ip() or get_local_ip(),
+            "name": local_friendly,
+            "hostname": local_hostname,
+            "is_local": True
+        }
+    return {
+        "id": ip,
+        "ip": ip,
+        "name": st.get("active_pc_name") or format_friendly_pc_name("", ip),
+        "hostname": st.get("active_pc_hostname") or ip,
+        "is_local": False
+    }
+
+def is_remote_pc_active():
+    ip = get_active_pc_ip()
+    if ip in ("local", "127.0.0.1", "localhost", ""):
+        return False
+    my_ts = get_tailscale_ip()
+    my_loc = get_local_ip()
+    if ip in (my_ts, my_loc):
+        return False
+    return True
+
+def check_tcp_port(ip, port=8443, timeout=0.45):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        return s.connect_ex((ip, port)) == 0
+    except Exception:
+        return False
+    finally:
+        s.close()
+
+def remote_api_request(remote_ip, path, method="GET", json_body=None, timeout=6.0):
+    ctx = ssl._create_unverified_context()
+    url = f"https://{remote_ip}:8443{path}"
+    data_bytes = None
+    headers = {}
+    if json_body is not None:
+        data_bytes = json.dumps(json_body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+            return json.loads(raw)
+    except Exception as e:
+        print(f"[TARS Web] Error proxy a PC remota ({remote_ip}{path}): {e}")
+        return {"_proxy_error": str(e)}
+
+def ensure_remote_media_cached(remote_ip, media_url):
+    if not media_url or not str(media_url).startswith("/media/"):
+        return
+    fname = os.path.basename(media_url)
+    local_dest = os.path.join(MEDIA_DIR, fname)
+    if os.path.exists(local_dest) and os.path.getsize(local_dest) > 0:
+        return
+    ctx = ssl._create_unverified_context()
+    url = f"https://{remote_ip}:8443/media/{fname}"
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, context=ctx, timeout=5.0) as resp:
+            content = resp.read()
+            if content:
+                with open(local_dest, "wb") as f:
+                    f.write(content)
+    except Exception as e:
+        print(f"[TARS Web] Error descargando media remota {url}: {e}")
+
+def discover_pcs():
+    active_ip = get_active_pc_ip()
+    local_hostname = socket.gethostname()
+    local_ts_ip = get_tailscale_ip() or get_local_ip()
+    local_friendly = format_friendly_pc_name(local_hostname, local_ts_ip)
+
+    pcs = [{
+        "id": "local",
+        "ip": local_ts_ip,
+        "name": local_friendly,
+        "hostname": local_hostname,
+        "os": "linux",
+        "is_local": True,
+        "online": True,
+        "tars_online": True,
+        "active": (not is_remote_pc_active()),
+        "direct_url": f"https://{local_ts_ip}:8443"
+    }]
+
+    seen_ips = {local_ts_ip, get_local_ip(), "127.0.0.1"}
+
+    # Auto-descubrir otras PCs de la red Tailscale
+    try:
+        out = subprocess.check_output(["tailscale", "status", "--json"], text=True, timeout=2.5)
+        ts_data = json.loads(out)
+        peers = ts_data.get("Peer") or {}
+        for _, peer in peers.items():
+            os_name = str(peer.get("OS") or "").lower()
+            if os_name in ("android", "ios"):
+                continue
+            ips = peer.get("TailscaleIPs") or []
+            ipv4 = next((x for x in ips if "." in x), "")
+            if not ipv4 or ipv4 in seen_ips:
+                continue
+            seen_ips.add(ipv4)
+            h_name = peer.get("HostName") or ipv4
+            friendly = format_friendly_pc_name(h_name, ipv4)
+            is_online = bool(peer.get("Online", False))
+            tars_ok = check_tcp_port(ipv4, 8443, timeout=0.45) if is_online else False
+            pcs.append({
+                "id": ipv4,
+                "ip": ipv4,
+                "name": friendly,
+                "hostname": h_name,
+                "os": os_name or "pc",
+                "is_local": False,
+                "online": is_online,
+                "tars_online": tars_ok,
+                "active": (active_ip == ipv4),
+                "direct_url": f"https://{ipv4}:8443"
+            })
+    except Exception as e:
+        print(f"[TARS Web] Error consultando tailscale status: {e}")
+
+    # Agregar PCs personalizadas guardadas manualmente
+    st = _read_tars_state()
+    for custom in (st.get("custom_pcs") or []):
+        c_ip = str(custom.get("ip") or "").strip()
+        if not c_ip or c_ip in seen_ips:
+            continue
+        seen_ips.add(c_ip)
+        c_name = custom.get("name") or format_friendly_pc_name("", c_ip)
+        tars_ok = check_tcp_port(c_ip, 8443, timeout=0.45)
+        pcs.append({
+            "id": c_ip,
+            "ip": c_ip,
+            "name": c_name,
+            "hostname": c_ip,
+            "os": "pc",
+            "is_local": False,
+            "online": tars_ok,
+            "tars_online": tars_ok,
+            "active": (active_ip == c_ip),
+            "direct_url": f"https://{c_ip}:8443"
+        })
+
+    return {
+        "active_pc": get_active_pc_info(),
+        "pcs": pcs
+    }
+
+async def handle_get_pcs(request):
+    data = await asyncio.to_thread(discover_pcs)
+    return web.json_response(data)
+
+async def handle_select_pc(request):
+    try:
+        body = await request.json()
+        target_id = str(body.get("id") or body.get("ip") or "local").strip()
+        target_name = str(body.get("name") or "").strip()
+        target_hostname = str(body.get("hostname") or "").strip()
+
+        my_ts = get_tailscale_ip()
+        my_loc = get_local_ip()
+        if target_id in ("local", "127.0.0.1", "localhost", my_ts, my_loc):
+            _write_tars_state({
+                "active_pc_ip": "local",
+                "active_pc_name": format_friendly_pc_name(socket.gethostname()),
+                "active_pc_hostname": socket.gethostname()
+            })
+            # Actualizar indice de notificacion local para no re-disparar mensajes viejos
+            try:
+                idx, _, _ = await asyncio.to_thread(get_latest_transcript_message)
+                LAST_NOTIFIED_STEP["idx"] = idx
+            except Exception:
+                pass
+        else:
+            if not target_name:
+                target_name = format_friendly_pc_name(target_hostname, target_id)
+            _write_tars_state({
+                "active_pc_ip": target_id,
+                "active_pc_name": target_name,
+                "active_pc_hostname": target_hostname or target_id
+            })
+            # Sincronizar ultimo step_index de la PC remota para no notificar mensajes viejos
+            try:
+                rem_sync = await asyncio.to_thread(remote_api_request, target_id, "/api/sync?last_index=999999", "GET", None, 2.5)
+                if isinstance(rem_sync, dict) and "step_index" in rem_sync:
+                    LAST_NOTIFIED_STEP["idx"] = int(rem_sync.get("step_index") or 0)
+            except Exception:
+                pass
+
+        return web.json_response({
+            "success": True,
+            "active_pc": get_active_pc_info()
+        })
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+async def handle_add_pc(request):
+    try:
+        body = await request.json()
+        raw_ip = str(body.get("ip") or "").strip()
+        raw_ip = re.sub(r"^https?://", "", raw_ip).split(":")[0].split("/")[0].strip()
+        name = str(body.get("name") or "").strip() or format_friendly_pc_name("", raw_ip)
+        if not raw_ip:
+            return web.json_response({"success": False, "error": "IP inválida"}, status=400)
+        st = _read_tars_state()
+        custom_pcs = [c for c in (st.get("custom_pcs") or []) if c.get("ip") != raw_ip]
+        custom_pcs.append({"ip": raw_ip, "name": name})
+        _write_tars_state({
+            "custom_pcs": custom_pcs,
+            "active_pc_ip": raw_ip,
+            "active_pc_name": name,
+            "active_pc_hostname": raw_ip
+        })
+        data = await asyncio.to_thread(discover_pcs)
+        return web.json_response({"success": True, **data})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
 def get_pc_sound_muted():
     try:
@@ -1370,6 +1730,11 @@ async def handle_toggle_mobile_voice(request):
 
 async def handle_toggle_pc_sound(request):
     try:
+        if is_remote_pc_active():
+            rem_ip = get_active_pc_ip()
+            rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/toggle_pc_sound", "POST", {})
+            if isinstance(rem_res, dict) and "pc_audio_muted" in rem_res:
+                return web.json_response(rem_res)
         curr = get_pc_sound_muted()
         new_state = not curr
         await asyncio.to_thread(set_pc_sound_muted, new_state)
@@ -1378,6 +1743,11 @@ async def handle_toggle_pc_sound(request):
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 async def handle_get_chats(request):
+    if is_remote_pc_active():
+        rem_ip = get_active_pc_ip()
+        rem_chats = await asyncio.to_thread(remote_api_request, rem_ip, "/api/chats", "GET")
+        if isinstance(rem_chats, dict) and "chats" in rem_chats:
+            return web.json_response(rem_chats)
     chats_data = await asyncio.to_thread(get_antigravity_chats)
     return web.json_response(chats_data)
 
@@ -1387,6 +1757,12 @@ async def handle_switch_chat(request):
         target = data.get("target") or data.get("id") or data.get("direction") or ""
         if not target:
             return web.json_response({"success": False, "error": "Debe indicar objetivo o direccion"}, status=400)
+
+        if is_remote_pc_active():
+            rem_ip = get_active_pc_ip()
+            rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/switch_chat", "POST", data)
+            if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
+                return web.json_response(rem_res)
 
         result = await asyncio.to_thread(switch_antigravity_chat, target)
         return web.json_response(result)
@@ -1508,12 +1884,22 @@ def switch_antigravity_model(model_name, effort=None):
     return {"success": True, "current_model": new_model or model_name}
 
 async def handle_get_models(request):
+    if is_remote_pc_active():
+        rem_ip = get_active_pc_ip()
+        rem_models = await asyncio.to_thread(remote_api_request, rem_ip, "/api/models", "GET")
+        if isinstance(rem_models, dict) and "models" in rem_models:
+            return web.json_response(rem_models)
     data = await asyncio.to_thread(get_antigravity_models)
     return web.json_response(data)
 
 async def handle_switch_model(request):
     try:
         data = await request.json()
+        if is_remote_pc_active():
+            rem_ip = get_active_pc_ip()
+            rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/switch_model", "POST", data)
+            if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
+                return web.json_response(rem_res)
         model_name = data.get("model") or data.get("name") or ""
         effort = data.get("effort") or None
         res = await asyncio.to_thread(switch_antigravity_model, model_name, effort)
@@ -1677,6 +2063,11 @@ async def handle_tunnel_url(request):
 async def handle_cancel(request):
     global LAST_CANCEL_TIMESTAMP
     LAST_CANCEL_TIMESTAMP = time.time()
+    if is_remote_pc_active():
+        rem_ip = get_active_pc_ip()
+        rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/cancel", "POST", {})
+        if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
+            return web.json_response(rem_res)
     res = await asyncio.to_thread(cancel_antigravity_ide)
     return web.json_response(res)
 
@@ -1688,6 +2079,9 @@ def init_app():
     app.router.add_get("/api/tunnel_url", handle_tunnel_url)
     app.router.add_get("/api/vapid_public_key", handle_vapid_public_key)
     app.router.add_post("/api/push_subscribe", handle_push_subscribe)
+    app.router.add_get("/api/pcs", handle_get_pcs)
+    app.router.add_post("/api/select_pc", handle_select_pc)
+    app.router.add_post("/api/add_pc", handle_add_pc)
     app.router.add_get("/api/chats", handle_get_chats)
     app.router.add_post("/api/switch_chat", handle_switch_chat)
     app.router.add_get("/api/models", handle_get_models)
@@ -1831,24 +2225,48 @@ async def _handle_dual_8443(client_reader, client_writer, internal_tls_port, def
 async def watch_transcript_for_push():
     # Inicializar en el paso actual para no re-notificar mensajes viejos al arrancar
     try:
-        idx, _, _ = await asyncio.to_thread(get_latest_transcript_message)
-        LAST_NOTIFIED_STEP["idx"] = idx
+        if is_remote_pc_active():
+            rem_ip = get_active_pc_ip()
+            rem_sync = await asyncio.to_thread(remote_api_request, rem_ip, "/api/sync?last_index=999999", "GET", None, 2.5)
+            if isinstance(rem_sync, dict):
+                LAST_NOTIFIED_STEP["idx"] = int(rem_sync.get("step_index") or 0)
+        else:
+            idx, _, _ = await asyncio.to_thread(get_latest_transcript_message)
+            LAST_NOTIFIED_STEP["idx"] = idx
     except Exception:
         pass
 
     while True:
         await asyncio.sleep(1.5)
         try:
-            latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message)
-            if not proc_info.get("is_processing") and latest_idx > LAST_NOTIFIED_STEP["idx"] and latest_msg:
-                LAST_NOTIFIED_STEP["idx"] = latest_idx
-                await asyncio.to_thread(
-                    send_web_push_all,
-                    "🤖 TARS • Antigravity",
-                    latest_msg,
-                    "/",
-                    f"tars-step-{latest_idx}"
-                )
+            if is_remote_pc_active():
+                rem_ip = get_active_pc_ip()
+                pc_info = get_active_pc_info()
+                rem_data = await asyncio.to_thread(remote_api_request, rem_ip, f"/api/sync?last_index={LAST_NOTIFIED_STEP['idx']}", "GET", None, 3.0)
+                if isinstance(rem_data, dict) and not rem_data.get("_proxy_error"):
+                    p_info = rem_data.get("processing_info") or {}
+                    latest_idx = int(rem_data.get("step_index") or 0)
+                    latest_msg = rem_data.get("content") or ""
+                    if not p_info.get("is_processing") and latest_idx > LAST_NOTIFIED_STEP["idx"] and latest_msg:
+                        LAST_NOTIFIED_STEP["idx"] = latest_idx
+                        await asyncio.to_thread(
+                            send_web_push_all,
+                            f"🤖 TARS ({pc_info.get('name', 'PC')}) • Antigravity",
+                            latest_msg,
+                            "/",
+                            f"tars-step-{latest_idx}"
+                        )
+            else:
+                latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message)
+                if not proc_info.get("is_processing") and latest_idx > LAST_NOTIFIED_STEP["idx"] and latest_msg:
+                    LAST_NOTIFIED_STEP["idx"] = latest_idx
+                    await asyncio.to_thread(
+                        send_web_push_all,
+                        "🤖 TARS • Antigravity",
+                        latest_msg,
+                        "/",
+                        f"tars-step-{latest_idx}"
+                    )
         except Exception as e:
             print(f"[TARS Web] Error en watch_transcript_for_push: {e}")
 
