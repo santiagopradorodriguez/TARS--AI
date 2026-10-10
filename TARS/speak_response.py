@@ -16,115 +16,87 @@ OUTPUT_FILE = "/tmp/antigravity_response.mp3"
 def clean_text_for_speech(text):
     if not text:
         return ""
-        
-    # 1. Remove multiline code blocks
-    text = re.sub(r'```[\s\S]*?```', ' [código en pantalla] ', text)
-    
-    # 2. Replace display math blocks ($$...$$ or \[...\]) with clean indicator
-    text = re.sub(r'\$\$[\s\S]*?\$\$', ' [fórmula en pantalla] ', text)
-    text = re.sub(r'\\\[[\s\S]*?\\\]', ' [fórmula en pantalla] ', text)
-    
-    # 3. Handle file:// links and markdown links
-    text = re.sub(r'!\[.*?\]\(.*?\)', '', text)
-    text = re.sub(r'\[(.*?)\]\(file://[^\)]+\)', r'\1', text)
-    text = re.sub(r'\[(.*?)\]\([^\)]+\)', r'\1', text)
-    text = re.sub(r'file://[^\s)]+', '', text)
-    
-    # 4. Remove inline code backticks while preserving content
-    text = re.sub(r'`([^`]+)`', r'\1', text)
-    
-    # 5. Remove HTML tags
-    text = re.sub(r'<[^>]+>', '', text)
-    
-    # 6. Convert common LaTeX and math symbols to natural Spanish speech BEFORE stripping symbols
-    # Arrows
-    text = re.sub(r'\\(?:to|rightarrow|longrightarrow|Rightarrow)\b', ' a ', text)
-    text = re.sub(r'\\(?:leftarrow|longleftarrow|Leftarrow)\b', ' desde ', text)
-    text = re.sub(r'\s*-->\s*|\s*->\s*|\s*=>\s*', ' a ', text)
-    
-    # Comparators and math operators
-    text = re.sub(r'\\approx\b', ' aproximadamente ', text)
-    text = re.sub(r'\\(?:neq|ne)\b', ' distinto de ', text)
-    text = re.sub(r'\\(?:leq|le)\b', ' menor o igual a ', text)
-    text = re.sub(r'\\(?:geq|ge)\b', ' mayor o igual a ', text)
-    text = re.sub(r'\\times\b', ' por ', text)
-    text = re.sub(r'\\pm\b', ' más o menos ', text)
-    text = re.sub(r'\\cdot\b', ' ', text)
-    text = re.sub(r'\\sim\b', ' similar a ', text)
-    
-    # Greek letters
-    text = re.sub(r'\\alpha\b', ' alfa ', text)
-    text = re.sub(r'\\beta\b', ' beta ', text)
-    text = re.sub(r'\\gamma\b', ' gamma ', text)
-    text = re.sub(r'\\delta\b', ' delta ', text)
-    text = re.sub(r'\\theta\b', ' tita ', text)
-    text = re.sub(r'\\mu\b', ' micro ', text)
-    text = re.sub(r'\\pi\b', ' pi ', text)
-    text = re.sub(r'\\sigma\b', ' sigma ', text)
-    text = re.sub(r'\\tau\b', ' tau ', text)
-    
-    # Common LaTeX wrappers: \text{...}, \mathbf{...}, \mathit{...}, \mathrm{...}
-    text = re.sub(r'\\(?:text|mathbf|mathit|mathrm|mathcal)\{([^}]*)\}', r'\1', text)
-    
-    # LaTeX sub/superscripts
-    text = re.sub(r'[_^]\{([^}]*)\}', r' sub \1 ', text)
-    text = re.sub(r'_([a-zA-Z0-9])', r' sub \1 ', text)
-    
-    # 7. Units pronunciation
-    text = re.sub(r'\bkHz\b', ' kilohertz ', text)
-    text = re.sub(r'\bHz\b', ' hertz ', text)
-    text = re.sub(r'\bms\b', ' milisegundos ', text)
-    text = re.sub(r'\bseg\b', ' segundos ', text)
-    text = re.sub(r'\b(\d+)\s*s\b', r'\1 segundos ', text)
-    text = re.sub(r'\buV\b|\bµV\b', ' microvoltios ', text)
-    text = re.sub(r'\bMB\b', ' megabytes ', text)
-    text = re.sub(r'\bGB\b', ' gigabytes ', text)
-    
-    # 8. Symbols translation to natural speech
-    text = re.sub(r'%', ' por ciento ', text)
-    text = re.sub(r'&', ' y ', text)
-    text = re.sub(r'\+', ' más ', text)
-    text = re.sub(r'=', ' es igual a ', text)
-    
-    # 9. Strip LaTeX inline delimiters ($ and \(\)) and stray LaTeX commands
-    text = re.sub(r'\\\(|\\\)', ' ', text)
-    text = re.sub(r'\\?\$', ' ', text)  # Strip ALL dollar signs!
-    text = re.sub(r'\\[a-zA-Z]+', ' ', text)  # Any remaining \command
-    
-    # 10. Phonetic slashes like /a/, /e/, /i/
-    text = re.sub(r'/([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+)/', r'\1', text)
-    
-    # 11. Command flags: e.g. --user, -nodisp -> user, nodisp
-    text = re.sub(r'(?<=\s)--?([a-zA-Z])', r'\1', text)
-    
-    # 12. Strip markdown headers, bullets, formatting
-    text = re.sub(r'^[#*>\-\s]+', '', text, flags=re.MULTILINE)
-    text = re.sub(r'[*_~`#^]', ' ', text)
-    
-    # 13. Remove slashes, backslashes, pipes, brackets, quotes
-    text = re.sub(r'[/\\|]', ' ', text)
-    text = re.sub(r'[(){}\[\]]', ', ', text)
-    text = re.sub(r'["\'«»“”]', '', text)
-    
-    # 14. Prevent assistant from vocalizing the exact closing trigger word
-    text = re.sub(r'\b[Cc]ambio\b', 'cierre', text)
-    
-    # 15. Normalize punctuation and spaces
-    text = re.sub(r'\s*,\s*', ', ', text)
-    text = re.sub(r'\s*\.\s*', '. ', text)
-    text = re.sub(r'[,.]\s*[,.]+', '.', text)
-    
-    # 16. Split by paragraphs to insert natural breathing pauses
+    # 1. Bloques de codigo multilínea
+    text = re.sub(r"```[\s\S]*?```", " [código en pantalla] ", text)
+    # 2. Bloques display de formulas ($$...$$ o \[...\])
+    def replace_display_math(m):
+        inner = m.group(1).strip()
+        if len(inner) > 60:
+            return " [fórmula en pantalla] "
+        return clean_latex_math(inner)
+    text = re.sub(r"\$\$([\s\S]*?)\$\$", replace_display_math, text)
+    text = re.sub(r"\\\[([\s\S]*?)\\\]", replace_display_math, text)
+    # 3. Formulas inline: $...$ o \(...\)
+    text = re.sub(r"\$([^\$\n]+)\$", lambda m: clean_latex_math(m.group(1)), text)
+    text = re.sub(r"\\\((.*?)\\\)", lambda m: clean_latex_math(m.group(1)), text)
+    # 4. Links y URLs
+    text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
+    text = re.sub(r"\[(.*?)\]\([^\)]+\)", r"\1", text)
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"file://\S+", "", text)
+
+    # 5. Tratamiento fonético exhaustivo de BARRAS DIAGONALES (evitar 'barra diagonal')
+    # 5.1 Fonemas o letras aisladas entre barras: /a/, /e/, /i/, /o/, /u/ -> vocal a, vocal e...
+    text = re.sub(r"/([aeiouAEIOUÁÉÍÓÚ])/", r" vocal \1 ", text)
+    # 5.2 Fonemas consonánticos o palabras entre barras: /pa/, /s/, /t/ -> pa, s, t
+    text = re.sub(r"/([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+)/", r" \1 ", text)
+    # 5.3 Abreviaturas comunes con barra
+    text = re.sub(r"\by/o\b", " y o ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bc/u\b", " cada uno ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bs/d\b", " sin datos ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bn/a\b", " no aplica ", text, flags=re.IGNORECASE)
+    # 5.4 Fechas numéricas: 28/08/2026 o 28/08
+    text = re.sub(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b", r" \1 de \2 de \3 ", text)
+    text = re.sub(r"\b(\d{1,2})/(\d{1,2})\b", r" \1 del \2 ", text)
+    # 5.5 Unidades comunes con barra
+    text = re.sub(r"\bkm/h\b", " kilómetros por hora ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bm/s\b", " metros por segundo ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bbits/s\b", " bits por segundo ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bmuestras/s(?:eg)?\b", " muestras por segundo ", text, flags=re.IGNORECASE)
+    # 5.6 Rutas de archivos y carpetas: separar niveles y conservar nombres limpios
+    text = re.sub(r'([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)', r'\1 \2', text)
+    text = re.sub(r'/(?=[\w.-]+/)', ' ', text)
+    # 5.7 Alternativas entre palabras (ej. PCA/UMAP -> PCA o UMAP)
+    text = re.sub(r"([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+)/([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+)", r"\1 o \2", text)
+    # 5.8 ELIMINACION TOTAL Y ABSOLUTA DE CUALQUIER BARRA DIAGONAL O INVERTIDA RESTANTE
+    text = text.replace("/", " ")
+    text = text.replace("\\", " ")
+
+    # 6. Codigo inline entre backticks
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # 7. Tags HTML
+    text = re.sub(r"<[^>]+>", "", text)
+    # 8. Unidades de ingenieria y bioelectricas
+    text = re.sub(r"\bkHz\b", " kilohertz ", text)
+    text = re.sub(r"\bHz\b", " hertz ", text)
+    text = re.sub(r"\bms\b", " milisegundos ", text)
+    text = re.sub(r"\bseg\b", " segundos ", text)
+    text = re.sub(r"\b(\d+)\s*s\b", r"\1 segundos ", text)
+    text = re.sub(r"\buV\b|\bµV\b", " microvoltios ", text)
+    # 9. Listas numeradas y viñetas
+    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*\d+\.\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^[#]+\s*", "", text, flags=re.MULTILINE)
+    # 10. ELIMINACION DEFINITIVA DE SIMBOLOS PROBLEMÁTICOS PARA TTS
+    text = text.replace("$", " ")
+    text = text.replace("_", " ")  # Nunca mas Edge-TTS pronunciando "guión bajo"
+    text = re.sub(r"[*#~`><|\\^]", " ", text)
+    text = re.sub(r"[{}[\]]", " ", text)
+    # 11. Normalizar puntuacion (sin romper numeros decimales como 1.25)
+    text = re.sub(r"\s*,\s*", ", ", text)
+    text = re.sub(r"(?<!\d)\s*\.\s*|\s*\.\s*(?!\d)", ". ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+    # 12. Dividir por parrafos para pausas de respiracion natural
     paragraphs = [p.strip() for p in text.split('\n') if p.strip()]
     paced_paragraphs = []
     for p in paragraphs:
         if not p.endswith(('.', ':', '!', '?', ';')):
             p += '.'
         paced_paragraphs.append(p)
-    
-    # Use ellipsis with space to prompt neural voice into a distinct pause
     text = ' ... '.join(paced_paragraphs)
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
     return text
 
 async def generate_speech(text):
@@ -145,7 +117,7 @@ def main():
             if os.path.exists(state_file):
                 with open(state_file, "r") as sf:
                     sdata = json.load(sf)
-                    if sdata.get("mode") == "off":
+                    if sdata.get("mode") == "off" or sdata.get("mute_pc_audio") is True:
                         print("{}")
                         return
         except Exception:

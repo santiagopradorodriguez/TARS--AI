@@ -3,4 +3,4 @@ venv/
 __pycache__/
 *.pyc
 TARS/web/media/*.mp3
-TARS/web/media/screen_*.png
+TARS/web/media/*.png

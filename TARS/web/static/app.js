@@ -1,4 +1,138 @@
 
+function updateProcessingBubble(info) {
+    let bubble = document.getElementById('processing-bubble');
+    if (!bubble) {
+        bubble = document.createElement('div');
+        bubble.id = 'processing-bubble';
+        bubble.className = 'message assistant processing-card';
+        chatContainer.appendChild(bubble);
+    }
+
+    const thoughtText = info.thought ? escapeHtml(info.thought) : 'Pensando los próximos pasos...';
+    let toolHtml = '';
+    if (info.tool_action || info.tool_name) {
+        const actionText = escapeHtml(info.tool_action || info.tool_name);
+        const detailHtml = info.tool_detail ? `<div class="proc-detail">${escapeHtml(info.tool_detail)}</div>` : '';
+        toolHtml = `
+            <div class="processing-tool-box">
+                <span class="proc-badge">⚡ ${escapeHtml(info.tool_name || 'Acción')}</span>
+                <span>${actionText}</span>
+                ${detailHtml}
+            </div>
+        `;
+    }
+
+    bubble.innerHTML = `
+        <div class="processing-card-header">
+            <span class="processing-pulse"></span>
+            <span class="processing-title">Antigravity pensando y ejecutando...</span>
+        </div>
+        <div class="processing-thought-box">
+            💭 ${thoughtText}
+        </div>
+        ${toolHtml}
+    `;
+
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+function removeProcessingBubble() {
+    const bubble = document.getElementById('processing-bubble');
+    if (bubble) {
+        bubble.remove();
+    }
+}
+
+// Helpers de formato y Markdown para TARS Movil
+function escapeHtml(str) {
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+window.copyCode = function(btn) {
+    const code = btn.closest('.code-block-wrapper').querySelector('code').innerText;
+    navigator.clipboard.writeText(code).then(() => {
+        const oldText = btn.innerText;
+        btn.innerText = 'Copiado!';
+        if (navigator.vibrate) navigator.vibrate(30);
+        setTimeout(() => { btn.innerText = oldText; }, 2000);
+    });
+};
+
+function renderMarkdown(text) {
+    if (!text) return '';
+
+    // 1. Extraer bloques de codigo multilinea
+    const codeBlocks = [];
+    const codeRegex = new RegExp('```([a-zA-Z0-9_-]*)[\\r\\n]+([\\s\\S]*?)```', 'g');
+    let processed = text.replace(codeRegex, (match, lang, code) => {
+        const id = '___CODEBLOCK_' + codeBlocks.length + '___';
+        const escapedCode = escapeHtml(code.trim());
+        const langLabel = lang ? '<span class="code-lang">' + escapeHtml(lang) + '</span>' : '<span class="code-lang">código</span>';
+        codeBlocks.push(
+            '<div class="code-block-wrapper">' +
+                '<div class="code-header">' +
+                    langLabel +
+                    '<button class="copy-code-btn" onclick="window.copyCode(this)">Copiar</button>' +
+                '</div>' +
+                '<pre><code>' + escapedCode + '</code></pre>' +
+            '</div>'
+        );
+        return id;
+    });
+
+    // 2. Escapar HTML del texto general
+    processed = escapeHtml(processed);
+
+    // 3. Codigo inline
+    processed = processed.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+
+    // 4. Encabezados
+    processed = processed.replace(/^### (.*$)/gim, '<h4>$1</h4>');
+    processed = processed.replace(/^## (.*$)/gim, '<h3>$1</h3>');
+    processed = processed.replace(/^# (.*$)/gim, '<h2>$1</h2>');
+
+    // 5. Negrita e italica
+    processed = processed.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    processed = processed.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    processed = processed.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+
+    // 6. Citas
+    processed = processed.replace(/^&gt; (.*$)/gim, '<blockquote>$1</blockquote>');
+
+    // 7. Lineas horizontales
+    processed = processed.replace(/^---$/gim, '<hr>');
+
+    // 8. Listas simples
+    processed = processed.replace(/^\s*[-*]\s+(.*)$/gim, '<li>$1</li>');
+    processed = processed.replace(/^\s*\d+\.\s+(.*)$/gim, '<li>$1</li>');
+
+    // 9. Links markdown [texto](url)
+    processed = processed.replace(/\[(.*?)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+    // 10. Parrafos y saltos de linea
+    processed = processed.replace(/\n{2,}/g, '</p><p>');
+    processed = processed.replace(/\n/g, '<br>');
+    processed = '<p>' + processed + '</p>';
+
+    // Limpieza
+    processed = processed.replace(/<p><\/p>/g, '');
+    processed = processed.replace(/<p>(<h[2-4]>.*?<\/h[2-4]>)<\/p>/g, '$1');
+    processed = processed.replace(/<p>(<div class="code-block-wrapper">[\s\S]*?<\/div>)<\/p>/g, '$1');
+    processed = processed.replace(/<p>(<blockquote>[\s\S]*?<\/blockquote>)<\/p>/g, '$1');
+
+    // 11. Restaurar bloques de codigo
+    codeBlocks.forEach((block, idx) => {
+        processed = processed.replace('___CODEBLOCK_' + idx + '___', block);
+    });
+
+    return processed;
+}
+
 // Desbloquear audio en movil al primer toque en la pantalla
 let audioUnlocked = false;
 function unlockMobileAudio() {
@@ -155,9 +289,16 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
 
-    const p = document.createElement('p');
-    p.innerText = text;
-    contentDiv.appendChild(p);
+    if (sender === 'assistant') {
+        contentDiv.innerHTML = renderMarkdown(text);
+        if (navigator.vibrate && autoPlay) {
+            navigator.vibrate([40, 60, 40]);
+        }
+    } else {
+        const p = document.createElement('p');
+        p.innerText = text;
+        contentDiv.appendChild(p);
+    }
 
     if (media && media.length > 0) {
         const mediaContainer = document.createElement('div');
@@ -226,7 +367,10 @@ async function sendTextMessage(text) {
         const resp = await fetch('/api/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: text })
+            body: JSON.stringify({ 
+                text: text,
+                chat_id: activeChatId || ''
+            })
         });
         const data = await resp.json();
         if (data.sent_to_ide) {
@@ -246,6 +390,9 @@ async function sendAudioBlob(blob) {
 
     const formData = new FormData();
     formData.append('audio', blob, 'voice.webm');
+    if (activeChatId) {
+        formData.append('chat_id', activeChatId);
+    }
 
     try {
         micStatusLabel.innerText = 'Transcribiendo...';
@@ -278,6 +425,7 @@ async function sendAudioBlob(blob) {
 
 async function startRecording() {
     if (isRecording) return;
+    if (navigator.vibrate) navigator.vibrate(35);
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaRecorder = new MediaRecorder(stream);
@@ -335,6 +483,42 @@ textInput.addEventListener('keydown', (e) => {
         sendTextMessage(textInput.value);
     }
 });
+
+// Control de Mute Sonido en PC
+const pcSoundToggleBtn = document.getElementById('pc-sound-toggle-btn');
+const pcSoundOnIcon = document.getElementById('pc-sound-on-icon');
+const pcSoundOffIcon = document.getElementById('pc-sound-off-icon');
+let isPcSoundMuted = false;
+
+function updatePcSoundUI(muted) {
+    isPcSoundMuted = !!muted;
+    if (!pcSoundToggleBtn) return;
+    if (isPcSoundMuted) {
+        pcSoundToggleBtn.classList.add('muted');
+        pcSoundToggleBtn.title = 'Audio en PC silenciado (toca para activar)';
+        if (pcSoundOnIcon) pcSoundOnIcon.style.display = 'none';
+        if (pcSoundOffIcon) pcSoundOffIcon.style.display = 'inline-block';
+    } else {
+        pcSoundToggleBtn.classList.remove('muted');
+        pcSoundToggleBtn.title = 'Silenciar audio en PC';
+        if (pcSoundOnIcon) pcSoundOnIcon.style.display = 'inline-block';
+        if (pcSoundOffIcon) pcSoundOffIcon.style.display = 'none';
+    }
+}
+
+if (pcSoundToggleBtn) {
+    pcSoundToggleBtn.addEventListener('click', async () => {
+        try {
+            const resp = await fetch('/api/toggle_pc_sound', { method: 'POST' });
+            const data = await resp.json();
+            if (data && data.success) {
+                updatePcSoundUI(data.pc_audio_muted);
+            }
+        } catch (e) {
+            console.error('Error al conmutar sonido en PC:', e);
+        }
+    });
+}
 
 // Selector de Chats de Antigravity
 const chatSelectorBtn = document.getElementById('chat-selector-btn');
@@ -472,6 +656,20 @@ async function syncWithAntigravity() {
             activeChatId = data.chat_id;
         }
 
+        if (typeof data.pc_audio_muted === 'boolean' && data.pc_audio_muted !== isPcSoundMuted) {
+            updatePcSoundUI(data.pc_audio_muted);
+        }
+
+        if (data.processing_info && data.processing_info.is_processing) {
+            updateProcessingBubble(data.processing_info);
+            micStatusLabel.innerText = "⏳ " + (data.processing_info.tool_action || "Pensando...");
+        } else {
+            removeProcessingBubble();
+            if (!isRecording && micStatusLabel.innerText.startsWith("⏳ ")) {
+                micStatusLabel.innerText = 'Toca para hablar';
+            }
+        }
+
         if (data.chat_changed) {
             // Cambio de chat detectado
             loadInitialChatTitle();
@@ -480,6 +678,7 @@ async function syncWithAntigravity() {
                 appendMessage('assistant', data.content, data.media, data.audio_url, false);
             }
         } else if (data.has_new && data.step_index > currentSyncIndex) {
+            removeProcessingBubble();
             currentSyncIndex = data.step_index;
             appendMessage('assistant', data.content, data.media, data.audio_url, true);
             micStatusLabel.innerText = 'Toca para hablar';

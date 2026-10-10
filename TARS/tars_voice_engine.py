@@ -47,7 +47,17 @@ def set_voice(voice_name):
         print(f"Error guardando voz: {e}", file=sys.stderr)
         return False
 
+def clean_edge_text(t):
+    import re
+    t = re.sub(r"/([aeiouAEIOUÁÉÍÓÚ])/", r" vocal \1 ", t)
+    t = re.sub(r"/([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+)/", r" \1 ", t)
+    t = re.sub(r"\by/o\b", " y o ", t, flags=re.IGNORECASE)
+    t = t.replace("/", " ").replace("\\", " ").replace("$", " ").replace("_", " ")
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
 async def _synthesize_edge_async(text, output_wav):
+    text = clean_edge_text(text)
     tmp_mp3 = output_wav + ".tmp.mp3"
     communicate = edge_tts.Communicate(text, DEFAULT_EDGE_VOICE, rate="-5%")
     await communicate.save(tmp_mp3)

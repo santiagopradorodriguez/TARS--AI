@@ -6,6 +6,7 @@ import json
 import uuid
 import time
 import ssl
+import socket
 import wave
 import subprocess
 import asyncio
@@ -37,13 +38,166 @@ if os.path.exists(VOSK_MODEL_PATH):
     except Exception as e:
         print(f"[TARS Web] Error cargando Vosk: {e}")
 
+def clean_latex_math(math_str):
+    # Fracciones: \frac{a}{b} -> a sobre b
+    math_str = re.sub(r"\\frac\{([^{}]+)\}\{([^{}]+)\}", r" \1 sobre \2 ", math_str)
+    # Raices: \sqrt{x} -> raiz de x
+    math_str = re.sub(r"\\sqrt\{([^{}]+)\}", r" raíz de \1 ", math_str)
+    # Modulo o valor absoluto |x|
+    math_str = re.sub(r"\|([^|]+)\|", r" módulo de \1 ", math_str)
+    # Operadores y comparadores
+    math_str = re.sub(r"\\(?:approx)\b", " aproximadamente ", math_str)
+    math_str = re.sub(r"\\(?:neq|ne)\b", " distinto de ", math_str)
+    math_str = re.sub(r"\\(?:leq|le)\b", " menor o igual a ", math_str)
+    math_str = re.sub(r"\\(?:geq|ge)\b", " mayor o igual a ", math_str)
+    math_str = re.sub(r"\\times\b", " por ", math_str)
+    math_str = re.sub(r"\\pm\b", " más o menos ", math_str)
+    math_str = re.sub(r"\\cdot\b", " por ", math_str)
+    math_str = re.sub(r"\\in\b", " en ", math_str)
+    math_str = re.sub(r"\\max\b", " máximo ", math_str)
+    math_str = re.sub(r"\\min\b", " mínimo ", math_str)
+    math_str = re.sub(r"\\sum\b", " suma ", math_str)
+    math_str = re.sub(r"\\int\b", " integral ", math_str)
+    # Letras griegas
+    math_str = re.sub(r"\\alpha\b", " alfa ", math_str)
+    math_str = re.sub(r"\\beta\b", " beta ", math_str)
+    math_str = re.sub(r"\\gamma\b", " gamma ", math_str)
+    math_str = re.sub(r"\\delta\b", " delta ", math_str)
+    math_str = re.sub(r"\\theta\b", " tita ", math_str)
+    math_str = re.sub(r"\\mu\b", " micro ", math_str)
+    math_str = re.sub(r"\\pi\b", " pi ", math_str)
+    math_str = re.sub(r"\\sigma\b", " sigma ", math_str)
+    math_str = re.sub(r"\\tau\b", " tau ", math_str)
+    math_str = re.sub(r"\\omega\b", " omega ", math_str)
+    # Envolturas comunes: \text{...}, \mathbf{...}, \tilde{...}
+    math_str = re.sub(r"\\(?:text|mathbf|mathit|mathrm|mathcal|tilde|hat|bar)\{([^{}]*)\}", r" \1 ", math_str)
+    # Potencias
+    math_str = re.sub(r"\^\{2\}|\^2", " al cuadrado ", math_str)
+    math_str = re.sub(r"\^\{3\}|\^3", " al cubo ", math_str)
+    math_str = re.sub(r"\^\{([^{}]*)\}", r" elevado a la \1 ", math_str)
+    math_str = re.sub(r"\^([0-9a-zA-Z])", r" elevado a la \1 ", math_str)
+    # Subindices
+    math_str = re.sub(r"_\{([^{}]*)\}", r" sub \1 ", math_str)
+    math_str = re.sub(r"_([0-9a-zA-Z])", r" sub \1 ", math_str)
+    # Igualdad y signos
+    math_str = re.sub(r"=", " es igual a ", math_str)
+    math_str = re.sub(r"\+", " más ", math_str)
+    # Limpieza de sintaxis residual
+    math_str = re.sub(r"\\(?:left|right|big|Big)\b", "", math_str)
+    math_str = re.sub(r"\\[a-zA-Z]+", " ", math_str)
+    math_str = re.sub(r"[{}\[\]()]", " ", math_str)
+    math_str = math_str.replace("_", " ")
+    return " " + math_str + " "
+
+
+def clean_text_for_speech(text):
+    if not text:
+        return ""
+    # 1. Bloques de codigo multilínea
+    text = re.sub(r"```[\s\S]*?```", " [código en pantalla] ", text)
+    # 2. Bloques display de formulas ($$...$$ o \[...\])
+    def replace_display_math(m):
+        inner = m.group(1).strip()
+        if len(inner) > 60:
+            return " [fórmula en pantalla] "
+        return clean_latex_math(inner)
+    text = re.sub(r"\$\$([\s\S]*?)\$\$", replace_display_math, text)
+    text = re.sub(r"\\\[([\s\S]*?)\\\]", replace_display_math, text)
+    # 3. Formulas inline: $...$ o \(...\)
+    text = re.sub(r"\$([^\$\n]+)\$", lambda m: clean_latex_math(m.group(1)), text)
+    text = re.sub(r"\\\((.*?)\\\)", lambda m: clean_latex_math(m.group(1)), text)
+    # 4. Links y URLs
+    text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
+    text = re.sub(r"\[(.*?)\]\([^\)]+\)", r"\1", text)
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"file://\S+", "", text)
+
+    # 5. Tratamiento fonético exhaustivo de BARRAS DIAGONALES (evitar 'barra diagonal')
+    # 5.1 Fonemas o letras aisladas entre barras: /a/, /e/, /i/, /o/, /u/ -> vocal a, vocal e...
+    text = re.sub(r"/([aeiouAEIOUÁÉÍÓÚ])/", r" vocal \1 ", text)
+    # 5.2 Fonemas consonánticos o palabras entre barras: /pa/, /s/, /t/ -> pa, s, t
+    text = re.sub(r"/([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+)/", r" \1 ", text)
+    # 5.3 Abreviaturas comunes con barra
+    text = re.sub(r"\by/o\b", " y o ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bc/u\b", " cada uno ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bs/d\b", " sin datos ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bn/a\b", " no aplica ", text, flags=re.IGNORECASE)
+    # 5.4 Fechas numéricas: 28/08/2026 o 28/08
+    text = re.sub(r"\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b", r" \1 de \2 de \3 ", text)
+    text = re.sub(r"\b(\d{1,2})/(\d{1,2})\b", r" \1 del \2 ", text)
+    # 5.5 Unidades comunes con barra
+    text = re.sub(r"\bkm/h\b", " kilómetros por hora ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bm/s\b", " metros por segundo ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bbits/s\b", " bits por segundo ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bmuestras/s(?:eg)?\b", " muestras por segundo ", text, flags=re.IGNORECASE)
+    # 5.6 Rutas de archivos y carpetas: separar niveles y conservar nombres limpios
+    text = re.sub(r'([a-zA-Z0-9_.-]+)/([a-zA-Z0-9_.-]+\.[a-zA-Z0-9]+)', r'\1 \2', text)
+    text = re.sub(r'/(?=[\w.-]+/)', ' ', text)
+    # 5.7 Alternativas entre palabras (ej. PCA/UMAP -> PCA o UMAP)
+    text = re.sub(r"([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+)/([a-zA-ZáéíóúÁÉÍÓÚñÑ0-9]+)", r"\1 o \2", text)
+    # 5.8 ELIMINACION TOTAL Y ABSOLUTA DE CUALQUIER BARRA DIAGONAL O INVERTIDA RESTANTE
+    text = text.replace("/", " ")
+    text = text.replace("\\", " ")
+
+    # 6. Codigo inline entre backticks
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # 7. Tags HTML
+    text = re.sub(r"<[^>]+>", "", text)
+    # 8. Unidades de ingenieria y bioelectricas
+    text = re.sub(r"\bkHz\b", " kilohertz ", text)
+    text = re.sub(r"\bHz\b", " hertz ", text)
+    text = re.sub(r"\bms\b", " milisegundos ", text)
+    text = re.sub(r"\bseg\b", " segundos ", text)
+    text = re.sub(r"\b(\d+)\s*s\b", r"\1 segundos ", text)
+    text = re.sub(r"\buV\b|\bµV\b", " microvoltios ", text)
+    # 9. Listas numeradas y viñetas
+    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*\d+\.\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^[#]+\s*", "", text, flags=re.MULTILINE)
+    # 10. ELIMINACION DEFINITIVA DE SIMBOLOS PROBLEMÁTICOS PARA TTS
+    text = text.replace("$", " ")
+    text = text.replace("_", " ")  # Nunca mas Edge-TTS pronunciando "guión bajo"
+    text = re.sub(r"[*#~`><|\\^]", " ", text)
+    text = re.sub(r"[{}[\]]", " ", text)
+    # 11. Normalizar puntuacion (sin romper numeros decimales como 1.25)
+    text = re.sub(r"\s*,\s*", ", ", text)
+    text = re.sub(r"(?<!\d)\s*\.\s*|\s*\.\s*(?!\d)", ". ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def extract_conversational_speech(text):
+    clean = clean_text_for_speech(text)
+    if not clean:
+        return ""
+    if len(clean) <= 320:
+        return clean
+
+    # Sintesis concisa de las primeras 2 oraciones para no cansar al oido
+    sentences = re.split(r'(?<=[.!?])\s+', clean)
+    summary = ""
+    for s in sentences:
+        s = s.strip()
+        if not s:
+            continue
+        if len(summary) + len(s) < 300:
+            summary = (summary + " " + s).strip()
+        else:
+            break
+
+    if not summary:
+        summary = clean[:250].rsplit(".", 1)[0] + "."
+
+    if not summary.endswith(('.', '!', '?')):
+        summary += "."
+
+    return summary + " El detalle completo y código lo tenés en pantalla."
+
+
 async def generate_tts_file(text):
-    clean_text = re.sub(r'```[\s\S]*?```', ' codigo en pantalla ', text)
-    clean_text = re.sub(r'\[(.*?)\]\([^\)]+\)', r'\1', clean_text)
-    clean_text = re.sub(r'https?://\S+', '', clean_text)
-    clean_text = clean_text.replace("*", "").replace("#", "").replace("`", "").replace(">", "").strip()
-    if len(clean_text) > 450:
-        clean_text = clean_text[:450] + " El resto de la respuesta esta en pantalla."
+    clean_text = extract_conversational_speech(text)
+    if not clean_text:
+        return None
 
     filename = f"reply_{uuid.uuid4().hex[:8]}.mp3"
     filepath = os.path.join(MEDIA_DIR, filename)
@@ -115,7 +269,7 @@ def get_devtools_ws_url():
         with open(port_file, "r") as f:
             port = f.readline().strip()
         req = urllib.request.Request(f"http://127.0.0.1:{port}/json/list")
-        with urllib.request.urlopen(req, timeout=1.5) as resp:
+        with urllib.request.urlopen(req, timeout=0.2) as resp:
             targets = json.loads(resp.read().decode())
             for t in targets:
                 if t.get("type") == "page" and "127.0.0.1" in t.get("url", ""):
@@ -130,7 +284,7 @@ def eval_in_antigravity(js_expr):
     if not ws_url:
         return None
     try:
-        with connect(ws_url, open_timeout=2) as ws:
+        with connect(ws_url, open_timeout=0.3) as ws:
             req_id = int(time.time() * 1000) % 100000
             msg = {
                 "id": req_id,
@@ -141,7 +295,7 @@ def eval_in_antigravity(js_expr):
                 }
             }
             ws.send(json.dumps(msg))
-            res_str = ws.recv(timeout=3)
+            res_str = ws.recv(timeout=0.5)
             res = json.loads(res_str)
             result = res.get("result", {}).get("result", {})
             return result.get("value")
@@ -225,12 +379,22 @@ def switch_antigravity_chat(target):
         target_title = chats[prev_idx]["title"]
 
     else:
-        # 1. Coincidencia exacta por ID
-        for c in chats:
-            if c["id"] == target:
-                target_id = c["id"]
-                target_title = c["title"]
-                break
+        # 0. Si el target ya es un UUID directo
+        import re
+        if re.match(r'^[a-f0-9\-]{20,}$', target.strip()):
+            target_id = target.strip()
+            for c in chats:
+                if c["id"] == target_id:
+                    target_title = c["title"]
+                    break
+
+        # 1. Coincidencia exacta por ID en lista de chats
+        if not target_id:
+            for c in chats:
+                if c["id"] == target:
+                    target_id = c["id"]
+                    target_title = c["title"]
+                    break
 
         # 2. Coincidencia por subcadena en el titulo
         if not target_id:
@@ -264,7 +428,9 @@ def switch_antigravity_chat(target):
             const title = link.getAttribute('aria-label') || link.innerText.trim().replace(/\\n+/g, ' ');
             return {{ success: true, id: targetId, title: title }};
         }}
-        return {{ success: false, error: "Elemento no hallado en la interfaz" }};
+        // Fallback: Si no esta en el sidebar visible, navegar directamente por pathname
+        window.location.pathname = '/c/' + targetId;
+        return {{ success: true, id: targetId, title: "{target_title or ''}" }};
     }})()
     """
     res = eval_in_antigravity(js_click)
@@ -274,84 +440,168 @@ def switch_antigravity_chat(target):
     return {"success": False, "error": res.get("error") if isinstance(res, dict) else "Error al cambiar chat"}
 
 
-def send_to_antigravity_ide(text):
-    try:
-        from Xlib import X, display, Xatom
-        import Xlib.protocol.event
-        from pynput import keyboard
+import threading
+_ide_send_lock = threading.Lock()
 
-        d = display.Display(":0")
-        root = d.screen().root
-        client_list = root.get_full_property(d.intern_atom("_NET_CLIENT_LIST"), Xatom.WINDOW)
-        antigravity_win = None
-        if client_list:
-            for w_id in client_list.value:
-                w = d.create_resource_object("window", w_id)
-                wm_class = w.get_wm_class()
-                if wm_class and any("antigravity" in c.lower() for c in wm_class):
-                    antigravity_win = w_id
-                    break
-
-        if not antigravity_win:
-            print("[TARS Web] Ventana de Antigravity IDE no encontrada en el escritorio.")
-            return False
-
-        # 1. Activar y enfocar la ventana de Antigravity (source=2 para evitar bloqueo de Mutter)
-        data = [2, 0, 0, 0, 0]
-        event = Xlib.protocol.event.ClientMessage(
-            window=antigravity_win,
-            client_type=d.intern_atom("_NET_ACTIVE_WINDOW"),
-            data=(32, data)
-        )
-        root.send_event(event, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
-        d.sync()
-        time.sleep(0.18)
-
-        # 2. Asegurar foco en el input del chat con Ctrl+L
-        controller = keyboard.Controller()
-        controller.press(keyboard.Key.ctrl_l)
-        controller.press('l')
-        time.sleep(0.04)
-        controller.release('l')
-        controller.release(keyboard.Key.ctrl_l)
-        time.sleep(0.08)
-
-        # 3. Escribir el texto y presionar Enter
-        controller.type(text)
-        time.sleep(0.08)
-        controller.press(keyboard.Key.enter)
-        time.sleep(0.04)
-        controller.release(keyboard.Key.enter)
-
-        print(f"[TARS Web] Mensaje inyectado con exito en Antigravity IDE: {text[:50]}")
-        return True
-    except Exception as e:
-        print(f"[TARS Web] Error inyectando texto en Antigravity IDE: {e}")
+def send_to_antigravity_ide(text, target_chat_id=None):
+    ws_url = get_devtools_ws_url()
+    if not ws_url:
+        print("[TARS Web] DevTools WS no disponible para inyectar texto.")
         return False
 
+    with _ide_send_lock:
+        try:
+            # 0. Si el usuario indico un chat especifico, asegurar que la ventana de Antigravity este en ese chat
+            if target_chat_id:
+                curr_id = get_current_antigravity_convo_id()
+                if curr_id and curr_id != target_chat_id:
+                    print(f"[TARS Web] Cambiando chat activo de Antigravity de {curr_id} a {target_chat_id}...")
+                    switch_antigravity_chat(target_chat_id)
+                    time.sleep(0.5)
 
-def execute_pc_task(command_text):
+            with connect(ws_url, open_timeout=3) as ws:
+                # 1. Si Antigravity esta generando una respuesta (boton Stop visible), esperar a que termine (hasta 60s)
+                busy_expr = """(() => {
+                    const stop = document.querySelector('button[aria-label*="Stop"], button[aria-label*="stop"], button[aria-label*="Detener"], button[aria-label*="detener"]');
+                    return Boolean(stop);
+                })()"""
+                for _ in range(240):  # 240 * 0.25s = 60s
+                    ws.send(json.dumps({
+                        "id": 99,
+                        "method": "Runtime.evaluate",
+                        "params": {"expression": busy_expr, "returnByValue": True}
+                    }))
+                    try:
+                        res = json.loads(ws.recv(timeout=1))
+                        is_busy = res.get("result", {}).get("result", {}).get("value")
+                        if not is_busy:
+                            break
+                    except Exception:
+                        break
+                    time.sleep(0.25)
+
+                # 2. Esperar de forma activa a que el input de Lexical este montado y enfocarlo (hasta 4s)
+                focus_expr = """(() => {
+                    const el = document.querySelector('[aria-label="Message input"]');
+                    if (el) {
+                        el.focus();
+                        return true;
+                    }
+                    return false;
+                })()"""
+                focused = False
+                for _ in range(40):
+                    ws.send(json.dumps({
+                        "id": 101,
+                        "method": "Runtime.evaluate",
+                        "params": {"expression": focus_expr, "returnByValue": True}
+                    }))
+                    try:
+                        res = json.loads(ws.recv(timeout=1))
+                        if res.get("result", {}).get("result", {}).get("value") is True:
+                            focused = True
+                            break
+                    except Exception:
+                        pass
+                    time.sleep(0.1)
+
+                if not focused:
+                    print("[TARS Web] Error: No se encontro el input de Antigravity para inyectar.")
+                    return False
+
+                # 3. Borrar cualquier texto residual (Ctrl+A -> Backspace)
+                ws.send(json.dumps({"id": 102, "method": "Input.dispatchKeyEvent", "params": {"type": "keyDown", "modifiers": 2, "windowsVirtualKeyCode": 65, "key": "a", "code": "KeyA"}}))
+                ws.recv(timeout=1)
+                ws.send(json.dumps({"id": 103, "method": "Input.dispatchKeyEvent", "params": {"type": "keyUp", "modifiers": 2, "windowsVirtualKeyCode": 65, "key": "a", "code": "KeyA"}}))
+                ws.recv(timeout=1)
+                ws.send(json.dumps({"id": 104, "method": "Input.dispatchKeyEvent", "params": {"type": "keyDown", "windowsVirtualKeyCode": 8, "key": "Backspace", "code": "Backspace"}}))
+                ws.recv(timeout=1)
+                ws.send(json.dumps({"id": 105, "method": "Input.dispatchKeyEvent", "params": {"type": "keyUp", "windowsVirtualKeyCode": 8, "key": "Backspace", "code": "Backspace"}}))
+                ws.recv(timeout=1)
+
+                # 4. Insertar el texto a traves de CDP Input domain (nativo en el render de Chrome)
+                ws.send(json.dumps({
+                    "id": 106,
+                    "method": "Input.insertText",
+                    "params": {"text": text}
+                }))
+                ws.recv(timeout=1)
+
+                # 5. Esperar de forma activa a que el boton de envio este habilitado y clickearlo (hasta 4s)
+                click_expr = """(() => {
+                    const btn = document.querySelector('button[aria-label="Send message"]');
+                    if (btn && !btn.disabled) {
+                        btn.click();
+                        return true;
+                    }
+                    return false;
+                })()"""
+                clicked = False
+                for _ in range(40):
+                    time.sleep(0.1)
+                    ws.send(json.dumps({
+                        "id": 107,
+                        "method": "Runtime.evaluate",
+                        "params": {"expression": click_expr, "returnByValue": True}
+                    }))
+                    try:
+                        res = json.loads(ws.recv(timeout=1))
+                        if res.get("result", {}).get("result", {}).get("value") is True:
+                            clicked = True
+                            break
+                    except Exception:
+                        pass
+
+                # Fallback por Enter si el boton no respondio pero esta el foco
+                if not clicked:
+                    ws.send(json.dumps({"id": 108, "method": "Input.dispatchKeyEvent", "params": {"type": "rawKeyDown", "windowsVirtualKeyCode": 13, "key": "Enter", "code": "Enter", "text": "\\r", "unmodifiedText": "\\r"}}))
+                    ws.recv(timeout=1)
+                    ws.send(json.dumps({"id": 109, "method": "Input.dispatchKeyEvent", "params": {"type": "keyUp", "windowsVirtualKeyCode": 13, "key": "Enter", "code": "Enter"}}))
+                    ws.recv(timeout=1)
+                    # Verificar si al apretar enter se envio
+                    check_empty_expr = """(() => {
+                        const el = document.querySelector('[aria-label="Message input"]');
+                        return el ? (el.innerText.trim() === '') : false;
+                    })()"""
+                    ws.send(json.dumps({"id": 110, "method": "Runtime.evaluate", "params": {"expression": check_empty_expr, "returnByValue": True}}))
+                    try:
+                        res = json.loads(ws.recv(timeout=1))
+                        if res.get("result", {}).get("result", {}).get("value") is True:
+                            clicked = True
+                    except Exception:
+                        pass
+
+                print(f"[TARS Web] Mensaje inyectado en Antigravity via CDP (clicked={clicked}): {text[:50]}")
+                return clicked
+        except Exception as e:
+            print(f"[TARS Web] Error inyectando texto via CDP: {e}")
+            return False
+
+
+def execute_pc_task(command_text, target_chat_id=None):
+    import re
     cmd_lower = command_text.lower().strip()
+    cmd_clean = re.sub(r'[^a-z0-9 áéíóúñ]', '', cmd_lower)
     reply = ""
     media = []
     sent_to_ide = False
 
     # 0. Control y cambio de chats en Antigravity
-    if "siguiente chat" in cmd_lower or "proximo chat" in cmd_lower or "avanzar chat" in cmd_lower or "otro chat" in cmd_lower:
+    if "siguiente chat" in cmd_clean or "proximo chat" in cmd_lower or "avanzar chat" in cmd_lower or "otro chat" in cmd_lower:
         res = switch_antigravity_chat(target="siguiente")
         if res.get("success"):
             return f"Cambiado al chat: {res.get('title')}", media, sent_to_ide
         else:
             return f"No pude cambiar de chat: {res.get('error', 'desconocido')}", media, sent_to_ide
 
-    if "chat anterior" in cmd_lower or "volver al chat" in cmd_lower or "retroceder chat" in cmd_lower:
+    if "chat anterior" in cmd_clean or "volver al chat" in cmd_lower or "retroceder chat" in cmd_lower:
         res = switch_antigravity_chat(target="anterior")
         if res.get("success"):
             return f"Cambiado al chat: {res.get('title')}", media, sent_to_ide
         else:
             return f"No pude cambiar de chat: {res.get('error', 'desconocido')}", media, sent_to_ide
 
-    if "listar chats" in cmd_lower or "que chats hay" in cmd_lower or "cuales chats" in cmd_lower or "lista de chats" in cmd_lower or "mostrar chats" in cmd_lower:
+    if "listar chats" in cmd_clean or "que chats hay" in cmd_lower or "cuales chats" in cmd_lower or "lista de chats" in cmd_lower or "mostrar chats" in cmd_lower:
         chats_info = get_antigravity_chats()
         chats = chats_info.get("chats", [])
         if not chats:
@@ -361,12 +611,18 @@ def execute_pc_task(command_text):
         res_text = f"Hay {total} chats en la lista. Primeros:\n" + "\n".join(nombres)
         return res_text, media, sent_to_ide
 
-    if any(cmd_lower.startswith(p) for p in ["cambiar al chat", "cambiar a chat", "cambiar chat", "ir al chat", "abrir chat", "poner el chat"]):
-        cleaned = cmd_lower
-        for p in ["cambiar al chat de ", "cambiar al chat ", "cambiar a chat ", "cambiar chat a ", "cambiar chat de ", "cambiar chat ", "ir al chat de ", "ir al chat ", "abrir chat de ", "abrir chat ", "poner el chat de ", "poner el chat "]:
-            if cleaned.startswith(p):
-                cleaned = cleaned[len(p):].strip()
-                break
+    # Buscar comandos de cambio de chat en cualquier parte de la frase
+    prefix_found = None
+    for p in ["cambiar al chat de", "cambiar al chat", "cambiar a chat", "cambiar chat a", "cambiar chat de", "cambiar chat", "ir al chat de", "ir al chat", "abrir chat de", "abrir chat", "poner el chat de", "poner el chat", "cambiar a"]:
+        if p in cmd_clean:
+            prefix_found = p
+            break
+            
+    if prefix_found:
+        idx = cmd_clean.find(prefix_found)
+        cleaned = cmd_clean[idx + len(prefix_found):].strip()
+        # Limpiar si el usuario dijo "enviar" al final u otra cosa
+        cleaned = cleaned.replace("enviar.", "").replace("enviar", "").strip()
         if not cleaned or cleaned == "de chat":
             res = switch_antigravity_chat(target="siguiente")
         else:
@@ -448,7 +704,7 @@ def execute_pc_task(command_text):
         return "Todos los sistemas de TARS estan en linea. Puedo controlar Spotify, tomar capturas de pantalla, crear archivos y abrir programas.", media, sent_to_ide
 
     # 6. Para todo lo demas: Inyectar directamente a esta ventana activa de Antigravity IDE
-    if send_to_antigravity_ide(command_text):
+    if send_to_antigravity_ide(command_text, target_chat_id=target_chat_id):
         sent_to_ide = True
         return "Mensaje enviado a Antigravity en la computadora.", media, sent_to_ide
 
@@ -477,10 +733,11 @@ async def handle_chat(request):
     try:
         data = await request.json()
         user_text = data.get("text", "").strip()
+        client_chat_id = data.get("chat_id")
         if not user_text:
             return web.json_response({"reply": "No recibi ningun texto."})
 
-        reply_text, media, sent_to_ide = await asyncio.to_thread(execute_pc_task, user_text)
+        reply_text, media, sent_to_ide = await asyncio.to_thread(execute_pc_task, user_text, client_chat_id)
         if sent_to_ide:
             return web.json_response({
                 "sent_to_ide": True,
@@ -499,20 +756,28 @@ async def handle_chat(request):
 async def handle_audio(request):
     try:
         reader = await request.multipart()
-        field = await reader.next()
-        if not field or field.name != "audio":
-            return web.json_response({"reply": "No se envio ningun archivo de audio."}, status=400)
-
+        client_chat_id = None
         temp_id = uuid.uuid4().hex[:8]
         raw_path = f"/tmp/upload_{temp_id}.raw"
         wav_path = f"/tmp/upload_{temp_id}.wav"
 
-        with open(raw_path, "wb") as f:
-            while True:
-                chunk = await field.read_chunk()
-                if not chunk:
-                    break
-                f.write(chunk)
+        while True:
+            field = await reader.next()
+            if not field:
+                break
+            if field.name == "audio":
+                with open(raw_path, "wb") as f:
+                    while True:
+                        chunk = await field.read_chunk()
+                        if not chunk:
+                            break
+                        f.write(chunk)
+            elif field.name == "chat_id":
+                val = await field.read()
+                client_chat_id = val.decode().strip()
+
+        if not os.path.exists(raw_path):
+            return web.json_response({"reply": "No se envio ningun archivo de audio."}, status=400)
 
         # Convertir a WAV 16kHz mono con ffmpeg
         await asyncio.to_thread(
@@ -540,7 +805,7 @@ async def handle_audio(request):
                 "audio_url": audio_url
             })
         else:
-            reply_text, media, sent_to_ide = await asyncio.to_thread(execute_pc_task, user_text)
+            reply_text, media, sent_to_ide = await asyncio.to_thread(execute_pc_task, user_text, client_chat_id)
             if sent_to_ide:
                 return web.json_response({
                     "sent_to_ide": True,
@@ -592,6 +857,14 @@ def get_active_transcript_path():
 def get_latest_transcript_message():
     latest_msg = ""
     latest_idx = 0
+    proc_info = {
+        "is_processing": False,
+        "thought": "",
+        "tool_name": "",
+        "tool_action": "",
+        "tool_detail": "",
+        "step_index": 0
+    }
     transcript_path = get_active_transcript_path()
     if transcript_path and os.path.exists(transcript_path):
         try:
@@ -607,14 +880,48 @@ def get_latest_transcript_message():
                 for line in lines:
                     try:
                         d = json.loads(line)
-                        if d.get("type") == "PLANNER_RESPONSE" and d.get("source") == "MODEL" and d.get("content"):
-                            latest_msg = d.get("content")
-                            latest_idx = d.get("step_index", 0)
-                    except:
+                        if d.get("type") == "PLANNER_RESPONSE" and d.get("source") == "MODEL":
+                            idx = d.get("step_index", 0)
+                            if d.get("content"):
+                                latest_msg = d.get("content")
+                                latest_idx = idx
+                                proc_info["is_processing"] = False
+                            else:
+                                proc_info["is_processing"] = True
+                                proc_info["step_index"] = idx
+
+                                # Extraer pensamiento
+                                raw_thinking = d.get("thinking", "").strip()
+                                if raw_thinking:
+                                    lines_think = [l.strip() for l in raw_thinking.splitlines() if l.strip()]
+                                    proc_info["thought"] = lines_think[-1] if lines_think else raw_thinking[:220]
+                                else:
+                                    proc_info["thought"] = "Razonando..."
+
+                                # Extraer llamadas a herramientas
+                                tool_calls = d.get("tool_calls", [])
+                                if tool_calls:
+                                    last_tool = tool_calls[-1]
+                                    t_name = last_tool.get("name", "")
+                                    args = last_tool.get("args", {})
+                                    proc_info["tool_name"] = t_name
+                                    act = args.get("toolAction") or args.get("toolSummary") or t_name
+                                    proc_info["tool_action"] = str(act).replace('"', "").replace("'", "")
+                                    detail = args.get("CommandLine") or args.get("TargetFile") or args.get("Query") or ""
+                                    if detail:
+                                        detail = str(detail).replace('"', "").replace("'", "")
+                                        if len(detail) > 130:
+                                            detail = detail[:130] + "..."
+                                    proc_info["tool_detail"] = detail
+                                else:
+                                    proc_info["tool_name"] = ""
+                                    proc_info["tool_action"] = "Pensando..."
+                                    proc_info["tool_detail"] = ""
+                    except Exception:
                         pass
         except Exception as e:
             print(f"[TARS Web] Error leyendo transcript: {e}")
-    return latest_idx, latest_msg
+    return latest_idx, latest_msg, proc_info
 
 
 async def handle_sync(request):
@@ -625,7 +932,7 @@ async def handle_sync(request):
     active_id = await asyncio.to_thread(get_current_antigravity_convo_id) or ""
     chat_changed = bool(client_chat_id and active_id and client_chat_id != active_id)
 
-    latest_idx, latest_msg = await asyncio.to_thread(get_latest_transcript_message)
+    latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message)
 
     if chat_changed or (latest_idx > last_idx and latest_msg):
         # Extraer imagenes si las hay
@@ -641,7 +948,7 @@ async def handle_sync(request):
         # Generar TTS solo si no fue cambio de chat
         audio_url = None
         if not chat_changed and latest_msg:
-            audio_url = await generate_tts_file(latest_msg[:400])
+            audio_url = await generate_tts_file(latest_msg)
 
         return web.json_response({
             "has_new": True,
@@ -650,15 +957,60 @@ async def handle_sync(request):
             "media": media,
             "audio_url": audio_url,
             "chat_id": active_id,
-            "chat_changed": chat_changed
+            "chat_changed": chat_changed,
+            "processing_info": proc_info,
+            "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
+            "pc_audio_muted": get_pc_sound_muted()
         })
 
     return web.json_response({
         "has_new": False,
         "step_index": latest_idx,
         "chat_id": active_id,
-        "chat_changed": False
+        "chat_changed": False,
+        "processing_info": proc_info,
+        "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
+        "pc_audio_muted": get_pc_sound_muted()
     })
+
+TARS_STATE_FILE = "/home/santiago/.gemini/config/tars_state.json"
+
+def get_pc_sound_muted():
+    try:
+        if os.path.exists(TARS_STATE_FILE):
+            with open(TARS_STATE_FILE, "r") as f:
+                data = json.load(f)
+                return bool(data.get("pc_audio_muted", False))
+    except Exception:
+        pass
+    return False
+
+def set_pc_sound_muted(muted):
+    try:
+        data = {}
+        if os.path.exists(TARS_STATE_FILE):
+            with open(TARS_STATE_FILE, "r") as f:
+                data = json.load(f)
+        data["pc_audio_muted"] = bool(muted)
+        with open(TARS_STATE_FILE, "w") as f:
+            json.dump(data, f)
+        if muted:
+            subprocess.run(["pkill", "-9", "-f", "ffplay.*antigravity_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["pkill", "-9", "-f", "tars_player.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["pkill", "-9", "-f", "paplay.*antigravity_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception as e:
+        print(f"[TARS Web] Error guardando estado sonido PC: {e}")
+        return False
+
+async def handle_toggle_pc_sound(request):
+    try:
+        curr = get_pc_sound_muted()
+        new_state = not curr
+        await asyncio.to_thread(set_pc_sound_muted, new_state)
+        return web.json_response({"success": True, "pc_audio_muted": new_state})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
 async def handle_get_chats(request):
     chats_data = await asyncio.to_thread(get_antigravity_chats)
@@ -688,6 +1040,7 @@ def init_app():
     app.router.add_get("/manifest.json", handle_manifest)
     app.router.add_get("/api/chats", handle_get_chats)
     app.router.add_post("/api/switch_chat", handle_switch_chat)
+    app.router.add_post("/api/toggle_pc_sound", handle_toggle_pc_sound)
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/api/audio", handle_audio)
     app.router.add_get("/api/sync", handle_sync)
@@ -695,18 +1048,92 @@ def init_app():
     app.router.add_static("/media/", MEDIA_DIR)
     return app
 
+
+def get_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.254.254.254", 1))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
+
+def get_tailscale_ip():
+    try:
+        res = subprocess.check_output(["tailscale", "ip", "-4"], text=True, timeout=2).strip()
+        if res:
+            return res.split()[0]
+    except Exception:
+        pass
+    return None
+
+def ensure_ssl_certificates(local_ip, tailscale_ip=None):
+    os.makedirs(CERTS_DIR, exist_ok=True)
+    needs_gen = not (os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE))
+    if not needs_gen:
+        try:
+            out = subprocess.check_output(["openssl", "x509", "-text", "-noout", "-in", CERT_FILE], text=True)
+            if f"IP Address:{local_ip}" not in out and f"IP:{local_ip}" not in out:
+                needs_gen = True
+            if tailscale_ip and f"IP Address:{tailscale_ip}" not in out:
+                needs_gen = True
+        except Exception:
+            needs_gen = True
+
+    if needs_gen:
+        san_parts = [
+            "DNS:pop-os.local",
+            "DNS:localhost",
+            "IP:127.0.0.1",
+            f"IP:{local_ip}"
+        ]
+        if tailscale_ip:
+            san_parts.append(f"IP:{tailscale_ip}")
+            san_parts.append("DNS:pop-os")
+
+        san = "subjectAltName=" + ",".join(san_parts)
+        cmd = [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048",
+            "-keyout", KEY_FILE, "-out", CERT_FILE,
+            "-days", "3650", "-nodes",
+            "-subj", f"/CN={local_ip}",
+            "-addext", san
+        ]
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            print(f"[TARS Web] Certificado SSL generado con exito para IP {local_ip}")
+        except Exception as e:
+            print(f"[TARS Web] Error generando certificado SSL: {e}")
+
 def main():
     port = 8443
     host = "0.0.0.0"
     app = init_app()
 
+    local_ip = get_local_ip()
+    ts_ip = get_tailscale_ip()
+    ensure_ssl_certificates(local_ip, ts_ip)
+
     ssl_context = None
     if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_context.load_cert_chain(CERT_FILE, KEY_FILE)
-        print(f"[TARS Web] SSL habilitado. Servidor listo en: https://192.168.1.y:{port}")
+        print(f"[TARS Web] SSL habilitado. Servidor listo en:")
+        print(f"           - https://{local_ip}:{port}")
+        print(f"           - https://pop-os.local:{port}")
+        if ts_ip:
+            print(f"           - https://{ts_ip}:{port} (Remoto Tailscale)")
+        
+        # Notificacion visual en Pop!_OS para saber la direccion de un vistazo
+        try:
+            msg = f"https://{local_ip}:{port}\no https://pop-os.local:{port}"
+            subprocess.Popen(["notify-send", "TARS Móvil Listo", msg, "-t", "8000"])
+        except Exception:
+            pass
     else:
-        print(f"[TARS Web] Servidor listo (sin SSL) en: http://192.168.1.y:{port}")
+        print(f"[TARS Web] Servidor listo (sin SSL) en: http://{local_ip}:{port}")
 
     web.run_app(app, host=host, port=port, ssl_context=ssl_context)
 
