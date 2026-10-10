@@ -473,7 +473,22 @@ def switch_antigravity_chat(target):
 import threading
 _ide_send_lock = threading.Lock()
 
-def send_to_antigravity_ide(text, target_chat_id=None):
+def cdp_call(ws, req_id, method, params=None, timeout=1.5):
+    msg = {"id": req_id, "method": method}
+    if params:
+        msg["params"] = params
+    ws.send(json.dumps(msg))
+    end_t = time.time() + timeout
+    while time.time() < end_t:
+        try:
+            r = json.loads(ws.recv(timeout=0.5))
+            if r.get("id") == req_id:
+                return r
+        except Exception:
+            pass
+    return {}
+
+def send_to_antigravity_ide(text, target_chat_id=None, file_paths=None):
     ws_url = get_devtools_ws_url()
     if not ws_url:
         print("[TARS Web] DevTools WS no disponible para inyectar texto.")
@@ -501,6 +516,20 @@ def send_to_antigravity_ide(text, target_chat_id=None):
                     ws.recv(timeout=0.5)
                 except Exception:
                     pass
+
+                # 0.8 Si hay archivos adjuntos (imagenes, pdf, docs, codigo), inyectarlos mediante DOM.setFileInputFiles
+                if file_paths and len(file_paths) > 0:
+                    try:
+                        valid_files = [os.path.abspath(f) for f in file_paths if os.path.exists(f)]
+                        if valid_files:
+                            r_eval = cdp_call(ws, 95, "Runtime.evaluate", {"expression": "document.querySelector('input[type=file]')"})
+                            obj_id = r_eval.get("result", {}).get("result", {}).get("objectId")
+                            if obj_id:
+                                cdp_call(ws, 96, "DOM.setFileInputFiles", {"files": valid_files, "objectId": obj_id})
+                                time.sleep(0.4)
+                                print(f"[TARS Web] Adjuntos inyectados a Antigravity ({len(valid_files)} archivos): {valid_files}")
+                    except Exception as e_file:
+                        print(f"[TARS Web] Error adjuntando archivos via CDP: {e_file}")
 
                 # 1. Si Antigravity esta generando una respuesta (boton Stop visible), esperar a que termine (hasta 60s)
                 busy_expr = """(() => {
@@ -551,6 +580,9 @@ def send_to_antigravity_ide(text, target_chat_id=None):
                     print("[TARS Web] Error: No se encontro el input de Antigravity para inyectar.")
                     return False
 
+                # Si el usuario solo envio archivos sin texto, poner un prompt descriptivo por defecto
+                prompt_to_send = text.strip() if (text and text.strip()) else "Por favor analizá los archivos / imágenes adjuntos."
+
                 # 3. Borrar cualquier texto residual (Ctrl+A -> Backspace)
                 ws.send(json.dumps({"id": 102, "method": "Input.dispatchKeyEvent", "params": {"type": "keyDown", "modifiers": 2, "windowsVirtualKeyCode": 65, "key": "a", "code": "KeyA"}}))
                 ws.recv(timeout=1)
@@ -565,7 +597,7 @@ def send_to_antigravity_ide(text, target_chat_id=None):
                 ws.send(json.dumps({
                     "id": 106,
                     "method": "Input.insertText",
-                    "params": {"text": text}
+                    "params": {"text": prompt_to_send}
                 }))
                 ws.recv(timeout=1)
 
@@ -640,13 +672,22 @@ def send_to_antigravity_ide(text, target_chat_id=None):
             return False
 
 
-def execute_pc_task(command_text, target_chat_id=None):
+UPLOADS_DIR = os.path.expanduser("~/.gemini/antigravity/scratch/TARS_uploads")
+os.makedirs(UPLOADS_DIR, exist_ok=True)
+
+def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
     import re
     cmd_lower = command_text.lower().strip()
     cmd_clean = re.sub(r'[^a-z0-9 áéíóúñ]', '', cmd_lower)
     reply = ""
     media = []
     sent_to_ide = False
+
+    # Si hay archivos adjuntos, enviarlos prioritariamente a Antigravity IDE
+    if file_paths and len(file_paths) > 0:
+        if send_to_antigravity_ide(command_text, target_chat_id=target_chat_id, file_paths=file_paths):
+            sent_to_ide = True
+            return "Archivos inyectados en Antigravity IDE.", media, sent_to_ide
 
     # 0. Control y cambio de chats en Antigravity
     if "siguiente chat" in cmd_clean or "proximo chat" in cmd_lower or "avanzar chat" in cmd_lower or "otro chat" in cmd_lower:
@@ -766,7 +807,7 @@ def execute_pc_task(command_text, target_chat_id=None):
         return "Todos los sistemas de TARS estan en linea. Puedo controlar Spotify, tomar capturas de pantalla, crear archivos y abrir programas.", media, sent_to_ide
 
     # 6. Para todo lo demas: Inyectar directamente a esta ventana activa de Antigravity IDE
-    if send_to_antigravity_ide(command_text, target_chat_id=target_chat_id):
+    if send_to_antigravity_ide(command_text, target_chat_id=target_chat_id, file_paths=file_paths):
         sent_to_ide = True
         return "Mensaje enviado a Antigravity en la computadora.", media, sent_to_ide
 
@@ -793,13 +834,46 @@ async def handle_index(request):
 
 async def handle_chat(request):
     try:
-        data = await request.json()
-        user_text = data.get("text", "").strip()
-        client_chat_id = data.get("chat_id")
-        if not user_text:
-            return web.json_response({"reply": "No recibi ningun texto."})
+        user_text = ""
+        client_chat_id = None
+        file_paths = []
 
-        reply_text, media, sent_to_ide = await asyncio.to_thread(execute_pc_task, user_text, client_chat_id)
+        if request.content_type.startswith("multipart/"):
+            reader = await request.multipart()
+            while True:
+                part = await reader.next()
+                if not part:
+                    break
+                if part.name == "text":
+                    user_text = (await part.read()).decode("utf-8", errors="ignore").strip()
+                elif part.name == "chat_id":
+                    client_chat_id = (await part.read()).decode("utf-8", errors="ignore").strip()
+                elif part.name == "files":
+                    orig_filename = part.filename or f"upload_{int(time.time())}.dat"
+                    clean_name = re.sub(r'[^\w\-.]', '_', orig_filename)
+                    saved_name = f"{int(time.time())}_{clean_name}"
+                    dest = os.path.join(UPLOADS_DIR, saved_name)
+                    with open(dest, "wb") as f:
+                        while True:
+                            chunk = await part.read_chunk()
+                            if not chunk:
+                                break
+                            f.write(chunk)
+                    file_paths.append(dest)
+        else:
+            data = await request.json()
+            user_text = data.get("text", "").strip()
+            client_chat_id = data.get("chat_id")
+
+        if not user_text and not file_paths:
+            return web.json_response({"reply": "No recibi ningun texto ni archivo."})
+
+        reply_text, media, sent_to_ide = await asyncio.to_thread(
+            execute_pc_task,
+            user_text,
+            target_chat_id=client_chat_id,
+            file_paths=file_paths
+        )
         if sent_to_ide:
             return web.json_response({
                 "sent_to_ide": True,
@@ -819,6 +893,7 @@ async def handle_audio(request):
     try:
         reader = await request.multipart()
         client_chat_id = None
+        file_paths = []
         temp_id = uuid.uuid4().hex[:8]
         raw_path = f"/tmp/upload_{temp_id}.raw"
         wav_path = f"/tmp/upload_{temp_id}.wav"
@@ -837,6 +912,18 @@ async def handle_audio(request):
             elif field.name == "chat_id":
                 val = await field.read()
                 client_chat_id = val.decode().strip()
+            elif field.name == "files":
+                orig_filename = field.filename or f"upload_{int(time.time())}.dat"
+                clean_name = re.sub(r'[^\w\-.]', '_', orig_filename)
+                saved_name = f"{int(time.time())}_{clean_name}"
+                dest = os.path.join(UPLOADS_DIR, saved_name)
+                with open(dest, "wb") as f:
+                    while True:
+                        chunk = await field.read_chunk()
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                file_paths.append(dest)
 
         if not os.path.exists(raw_path):
             return web.json_response({"reply": "No se envio ningun archivo de audio."}, status=400)
@@ -867,7 +954,12 @@ async def handle_audio(request):
                 "audio_url": audio_url
             })
         else:
-            reply_text, media, sent_to_ide = await asyncio.to_thread(execute_pc_task, user_text, client_chat_id)
+            reply_text, media, sent_to_ide = await asyncio.to_thread(
+                execute_pc_task,
+                user_text,
+                target_chat_id=client_chat_id,
+                file_paths=file_paths
+            )
             if sent_to_ide:
                 return web.json_response({
                     "sent_to_ide": True,

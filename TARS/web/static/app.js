@@ -384,41 +384,141 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
     chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
+// ===== MANEJO DE ARCHIVOS Y DOCUMENTOS ADJUNTOS =====
+const attachBtn = document.getElementById('attach-btn');
+const fileInput = document.getElementById('file-input');
+const attachmentPreviewBar = document.getElementById('attachment-preview-bar');
+let pendingAttachments = [];
+
+function renderAttachmentPreviews() {
+    if (!attachmentPreviewBar) return;
+    if (pendingAttachments.length === 0) {
+        attachmentPreviewBar.innerHTML = '';
+        attachmentPreviewBar.classList.add('hidden');
+        return;
+    }
+    attachmentPreviewBar.classList.remove('hidden');
+    attachmentPreviewBar.innerHTML = '';
+    pendingAttachments.forEach((file, index) => {
+        const chip = document.createElement('div');
+        chip.className = 'attachment-chip';
+
+        if (file.type && file.type.startsWith('image/')) {
+            const img = document.createElement('img');
+            img.className = 'attachment-chip-thumb';
+            img.src = URL.createObjectURL(file);
+            chip.appendChild(img);
+        } else {
+            const icon = document.createElement('span');
+            icon.className = 'attachment-chip-icon';
+            icon.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>`;
+            chip.appendChild(icon);
+        }
+
+        const name = document.createElement('span');
+        name.className = 'attachment-chip-name';
+        name.innerText = file.name;
+        chip.appendChild(name);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'attachment-chip-remove';
+        removeBtn.innerHTML = '&times;';
+        removeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            pendingAttachments.splice(index, 1);
+            renderAttachmentPreviews();
+        });
+        chip.appendChild(removeBtn);
+
+        attachmentPreviewBar.appendChild(chip);
+    });
+}
+
+if (attachBtn && fileInput) {
+    attachBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+            for (const f of e.target.files) {
+                pendingAttachments.push(f);
+            }
+            renderAttachmentPreviews();
+            fileInput.value = '';
+        }
+    });
+}
+
 async function sendTextMessage(text) {
-    if (!text.trim()) return;
-    appendMessage('user', text);
+    const trimmed = text.trim();
+    if (!trimmed && pendingAttachments.length === 0) return;
+
+    const filesToSend = [...pendingAttachments];
+    pendingAttachments = [];
+    renderAttachmentPreviews();
+
+    // Crear previews en la burbuja de chat del usuario
+    const userMedia = filesToSend.map(f => {
+        if (f.type && f.type.startsWith('image/')) {
+            return { type: 'image', url: URL.createObjectURL(f), name: f.name };
+        }
+        return { type: 'file', url: '#', name: f.name };
+    });
+
+    const userTextDisplay = trimmed || (filesToSend.length > 0 ? (filesToSend.length === 1 ? `[Archivo adjunto: ${filesToSend[0].name}]` : `[${filesToSend.length} archivos adjuntos]`) : '');
+    appendMessage('user', userTextDisplay, userMedia.length > 0 ? userMedia : null);
     textInput.value = '';
 
     try {
-        const resp = await fetch('/api/chat', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                text: text,
-                chat_id: activeChatId || ''
-            })
-        });
+        let resp;
+        if (filesToSend.length > 0) {
+            const formData = new FormData();
+            formData.append('text', trimmed);
+            formData.append('chat_id', activeChatId || '');
+            filesToSend.forEach(f => formData.append('files', f));
+            resp = await fetch('/api/chat', {
+                method: 'POST',
+                body: formData
+            });
+        } else {
+            resp = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    text: trimmed,
+                    chat_id: activeChatId || ''
+                })
+            });
+        }
         const data = await resp.json();
         if (data.sent_to_ide) {
-            // El mensaje ya fue inyectado en Antigravity IDE; esperamos la respuesta en vivo via /api/sync
             micStatusLabel.innerText = 'Antigravity procesando en PC...';
         } else if (data.reply) {
-            // Respuesta de comando local (Spotify, screenshot, etc.)
             appendMessage('assistant', data.reply, data.media, data.audio_url);
         }
     } catch (err) {
-        appendMessage('assistant', 'Error de conexion con el servidor local.');
+        appendMessage('assistant', 'Error de conexión al enviar el mensaje.');
     }
 }
 
 async function sendAudioBlob(blob) {
-    appendMessage('user', '[Mensaje de voz enviado]');
+    const filesToSend = [...pendingAttachments];
+    pendingAttachments = [];
+    renderAttachmentPreviews();
+
+    const userMedia = filesToSend.map(f => {
+        if (f.type && f.type.startsWith('image/')) {
+            return { type: 'image', url: URL.createObjectURL(f), name: f.name };
+        }
+        return { type: 'file', url: '#', name: f.name };
+    });
+
+    appendMessage('user', '[Mensaje de voz enviado]', userMedia.length > 0 ? userMedia : null);
 
     const formData = new FormData();
     formData.append('audio', blob, 'voice.webm');
     if (activeChatId) {
         formData.append('chat_id', activeChatId);
     }
+    filesToSend.forEach(f => formData.append('files', f));
 
     try {
         micStatusLabel.innerText = 'Transcribiendo...';

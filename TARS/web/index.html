@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0f1117">
     <title>TARS Movil</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/style.css?v=2.6">
+    <link rel="stylesheet" href="/static/style.css?v=2.7">
 </head>
 <body>
     <div class="app-container">
@@ -95,8 +95,15 @@
         </main>
 
         <footer class="app-footer">
+            <div id="attachment-preview-bar" class="attachment-preview-bar hidden"></div>
             <div class="input-bar">
-                <input type="text" id="text-input" placeholder="Escribe un comando o consulta..." autocomplete="off">
+                <input type="file" id="file-input" multiple accept="image/*,.pdf,.txt,.py,.js,.html,.css,.json,.md,.csv,.doc,.docx" style="display: none;">
+                <button id="attach-btn" class="icon-btn attach-btn" title="Adjuntar imagen o documento">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                        <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5a2.5 2.5 0 0 1 5 0v10.5c0 .83-.67 1.5-1.5 1.5s-1.5-.67-1.5-1.5V6H9v9.5a3 3 0 0 0 6 0V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/>
+                    </svg>
+                </button>
+                <input type="text" id="text-input" placeholder="Escribe un mensaje o adjunta archivos..." autocomplete="off">
                 <button id="send-btn" class="icon-btn" title="Enviar mensaje">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                         <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
@@ -165,6 +172,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=3.2"></script>
+    <script src="/static/app.js?v=3.3"></script>
 </body>
 </html>
