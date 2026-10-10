@@ -8,35 +8,39 @@ function updateProcessingBubble(info) {
         chatContainer.appendChild(bubble);
     }
 
-    const thoughtText = info.thought ? escapeHtml(info.thought) : 'Pensando los próximos pasos...';
-    let toolHtml = '';
-    if (info.tool_action || info.tool_name) {
-        const actionText = escapeHtml(info.tool_action || info.tool_name);
-        const detailHtml = info.tool_detail ? `<div class="proc-detail">${escapeHtml(info.tool_detail)}</div>` : '';
-        toolHtml = `
-            <div class="processing-tool-box">
-                <span class="proc-badge">⚡ ${escapeHtml(info.tool_name || 'Acción')}</span>
-                <span>${actionText}</span>
-                ${detailHtml}
-            </div>
-        `;
+    const stepsCount = info.steps_count || 1;
+    const actionText = escapeHtml(info.tool_action || info.thought || 'Procesando...');
+    const detailHtml = info.tool_detail ? `<div class="proc-detail">${escapeHtml(info.tool_detail)}</div>` : '';
+
+    let stepsListHtml = '';
+    if (Array.isArray(info.recent_steps) && info.recent_steps.length > 0) {
+        const items = info.recent_steps.map((st, idx) => {
+            const isLast = (idx === info.recent_steps.length - 1);
+            const icon = isLast ? '⏳' : '✅';
+            return `<div class="proc-step-item ${isLast ? 'current' : 'done'}">${icon} ${escapeHtml(st)}</div>`;
+        }).join('');
+        stepsListHtml = `<div class="processing-thought-box">${items}</div>`;
+    } else {
+        stepsListHtml = `<div class="processing-thought-box">⏳ ${actionText}</div>`;
     }
 
     bubble.innerHTML = `
         <div class="processing-card-header">
             <div class="processing-header-left">
                 <span class="processing-pulse"></span>
-                <span class="processing-title">Antigravity pensando...</span>
+                <span class="processing-title">🛠️ Laburando (Paso ${stepsCount})...</span>
             </div>
             <button class="proc-stop-inline-btn" onclick="window.cancelCurrentProcessing()" title="Cortar procesamiento de inmediato">
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
                 Cortar
             </button>
         </div>
-        <div class="processing-thought-box">
-            💭 ${thoughtText}
+        ${stepsListHtml}
+        <div class="processing-tool-box">
+            <span class="proc-badge">Ahora</span>
+            <span>${actionText}</span>
+            ${detailHtml}
         </div>
-        ${toolHtml}
     `;
 
     chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -1248,6 +1252,8 @@ document.addEventListener('click', () => {
 // Sincronizacion en tiempo real con la sesion activa de Antigravity (con lock anti-duplicados)
 let currentSyncIndex = 0;
 let isSyncing = false;
+let lastProgressToastTs = 0;
+let lastProgressToastStep = 0;
 const renderedStepIndices = new Set();
 
 async function syncWithAntigravity() {
@@ -1270,10 +1276,23 @@ async function syncWithAntigravity() {
 
         if (data.processing_info && data.processing_info.is_processing) {
             updateProcessingBubble(data.processing_info);
-            micStatusLabel.innerText = "⏳ " + (data.processing_info.tool_action || "Pensando...");
+            const actDesc = data.processing_info.tool_action || "Pensando...";
+            const stepsCnt = data.processing_info.steps_count || 1;
+            const pIdx = data.processing_info.step_index || 0;
+            micStatusLabel.innerText = `⏳ Paso ${stepsCnt}: ${actDesc}`;
             if (cancelProcBtn) cancelProcBtn.classList.add('active-danger');
             if (cancelProcLabel && !isRecording) cancelProcLabel.innerText = 'Cortar IA';
             acquireWakeLock(true);
+
+            // Actualizar de vez en cuando (cada 12s) qué está laburando Antigravity
+            const nowMs = Date.now();
+            if (stepsCnt >= 2 && pIdx !== lastProgressToastStep && (nowMs - lastProgressToastTs) >= 12000) {
+                lastProgressToastTs = nowMs;
+                lastProgressToastStep = pIdx;
+                if (navigator.vibrate) navigator.vibrate(50);
+                showWhatsAppToast(`🛠️ Laburando (Paso ${stepsCnt})`, actDesc);
+                updateMediaSessionNotification(`Paso ${stepsCnt}: ${actDesc}`);
+            }
         } else {
             removeProcessingBubble();
             acquireWakeLock(false);

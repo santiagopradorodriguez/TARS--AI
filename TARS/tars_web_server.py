@@ -1135,6 +1135,28 @@ def get_active_transcript_path():
     return latest_path
 
 
+def format_spanish_tool_action(t_name, args):
+    target_file = str(args.get("TargetFile") or args.get("AbsolutePath") or "").replace('"', "").replace("'", "")
+    base_file = os.path.basename(target_file) if target_file else ""
+    cmd_line = str(args.get("CommandLine") or "").replace('"', "").replace("'", "").strip()
+
+    if t_name == "view_file":
+        return f"📖 Leyendo {base_file}" if base_file else "📖 Leyendo archivo del proyecto"
+    elif t_name in ("replace_file_content", "multi_replace_file_content"):
+        return f"✏️ Editando {base_file}" if base_file else "✏️ Editando código"
+    elif t_name == "write_to_file":
+        return f"📝 Creando/actualizando {base_file}" if base_file else "📝 Escribiendo archivo"
+    elif t_name == "run_command":
+        short_cmd = cmd_line.split("&&")[0].strip()[:42] if cmd_line else "comando"
+        return f"💻 Ejecutando: {short_cmd}"
+    elif t_name in ("grep_search", "find_by_name"):
+        return "🔍 Buscando en el código"
+    elif t_name in ("search_web", "read_url_content"):
+        return "🌐 Consultando información en la web"
+    act = str(args.get("toolAction") or args.get("toolSummary") or t_name).replace('"', "").replace("'", "")
+    return f"⚙️ {act}" if act else "⚙️ Ejecutando herramienta"
+
+
 def get_latest_transcript_message():
     latest_msg = ""
     latest_idx = 0
@@ -1144,7 +1166,9 @@ def get_latest_transcript_message():
         "tool_name": "",
         "tool_action": "",
         "tool_detail": "",
-        "step_index": 0
+        "step_index": 0,
+        "steps_count": 0,
+        "recent_steps": []
     }
     transcript_path = get_active_transcript_path()
     if transcript_path and os.path.exists(transcript_path):
@@ -1161,6 +1185,10 @@ def get_latest_transcript_message():
                 for line in lines:
                     try:
                         d = json.loads(line)
+                        if d.get("type") == "USER_INPUT":
+                            proc_info["steps_count"] = 0
+                            proc_info["recent_steps"] = []
+                            continue
                         status_val = str(d.get("status", "")).upper()
                         if status_val in ("CANCELED", "CANCELLED", "ERROR"):
                             proc_info["is_processing"] = False
@@ -1174,33 +1202,33 @@ def get_latest_transcript_message():
                             else:
                                 proc_info["is_processing"] = True
                                 proc_info["step_index"] = idx
+                                proc_info["steps_count"] = proc_info.get("steps_count", 0) + 1
 
-                                # Extraer pensamiento
-                                raw_thinking = d.get("thinking", "").strip()
-                                if raw_thinking:
-                                    lines_think = [l.strip() for l in raw_thinking.splitlines() if l.strip()]
-                                    proc_info["thought"] = lines_think[-1] if lines_think else raw_thinking[:220]
-                                else:
-                                    proc_info["thought"] = "Razonando..."
-
-                                # Extraer llamadas a herramientas
+                                # Extraer llamadas a herramientas y formatear en español claro
                                 tool_calls = d.get("tool_calls", [])
                                 if tool_calls:
                                     last_tool = tool_calls[-1]
                                     t_name = last_tool.get("name", "")
                                     args = last_tool.get("args", {})
                                     proc_info["tool_name"] = t_name
-                                    act = args.get("toolAction") or args.get("toolSummary") or t_name
-                                    proc_info["tool_action"] = str(act).replace('"', "").replace("'", "")
-                                    detail = args.get("CommandLine") or args.get("TargetFile") or args.get("Query") or ""
+                                    spanish_act = format_spanish_tool_action(t_name, args)
+                                    proc_info["tool_action"] = spanish_act
+                                    raw_act = str(args.get("toolAction") or args.get("toolSummary") or "").replace('"', "").replace("'", "")
+                                    proc_info["thought"] = raw_act if raw_act else spanish_act
+                                    detail = args.get("CommandLine") or args.get("TargetFile") or args.get("AbsolutePath") or args.get("Query") or ""
                                     if detail:
                                         detail = str(detail).replace('"', "").replace("'", "")
                                         if len(detail) > 130:
                                             detail = detail[:130] + "..."
                                     proc_info["tool_detail"] = detail
+                                    if not proc_info["recent_steps"] or proc_info["recent_steps"][-1] != spanish_act:
+                                        proc_info["recent_steps"].append(spanish_act)
+                                        if len(proc_info["recent_steps"]) > 5:
+                                            proc_info["recent_steps"] = proc_info["recent_steps"][-5:]
                                 else:
                                     proc_info["tool_name"] = ""
-                                    proc_info["tool_action"] = "Pensando..."
+                                    proc_info["tool_action"] = "🧠 Analizando y planificando respuesta..."
+                                    proc_info["thought"] = "Analizando los próximos pasos..."
                                     proc_info["tool_detail"] = ""
                     except Exception:
                         pass
@@ -1763,12 +1791,16 @@ async def watch_transcript_for_push():
     except Exception:
         pass
 
+    last_progress_push_ts = 0.0
+    last_progress_step_idx = 0
+
     while True:
         await asyncio.sleep(1.5)
         try:
-            latest_idx, latest_msg, _ = await asyncio.to_thread(get_latest_transcript_message)
+            latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message)
             if latest_idx > LAST_NOTIFIED_STEP["idx"] and latest_msg:
                 LAST_NOTIFIED_STEP["idx"] = latest_idx
+                last_progress_step_idx = 0
                 await asyncio.to_thread(
                     send_web_push_all,
                     "🤖 TARS • Antigravity",
@@ -1776,6 +1808,22 @@ async def watch_transcript_for_push():
                     "/",
                     f"tars-step-{latest_idx}"
                 )
+            elif proc_info and proc_info.get("is_processing"):
+                p_idx = proc_info.get("step_index", 0)
+                steps_cnt = proc_info.get("steps_count", 1)
+                now = time.time()
+                # Actualizar de vez en cuando (cada 15s) qué está laburando Antigravity
+                if steps_cnt >= 2 and p_idx != last_progress_step_idx and (now - last_progress_push_ts) >= 15.0:
+                    last_progress_push_ts = now
+                    last_progress_step_idx = p_idx
+                    action_desc = proc_info.get("tool_action") or "Procesando tarea..."
+                    await asyncio.to_thread(
+                        send_web_push_all,
+                        f"🛠️ TARS laburando (Paso {steps_cnt})",
+                        action_desc,
+                        "/",
+                        f"tars-progress-{p_idx}"
+                    )
         except Exception as e:
             print(f"[TARS Web] Error en watch_transcript_for_push: {e}")
 

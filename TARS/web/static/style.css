@@ -1174,3 +1174,14 @@ body {
     background: #ef4444;
     color: #ffffff;
 }
+
+.proc-step-item {
+    font-size: 0.82rem;
+    padding: 3px 0;
+    color: #94a3b8;
+}
+
+.proc-step-item.current {
+    color: #f8fafc;
+    font-weight: 600;
+}
