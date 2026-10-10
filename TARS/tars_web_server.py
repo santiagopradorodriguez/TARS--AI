@@ -194,24 +194,54 @@ def extract_conversational_speech(text):
     return summary + " El detalle completo y código lo tenés en pantalla."
 
 
+TTS_CACHE = {}
+TTS_LOCK = None
+
 async def generate_tts_file(text):
+    global TTS_LOCK
+    if TTS_LOCK is None:
+        TTS_LOCK = asyncio.Lock()
     clean_text = extract_conversational_speech(text)
     if not clean_text:
         return None
 
-    filename = f"reply_{uuid.uuid4().hex[:8]}.mp3"
-    filepath = os.path.join(MEDIA_DIR, filename)
-    try:
-        comm = edge_tts.Communicate(clean_text, TTS_VOICE, rate="-4%")
-        await comm.save(filepath)
-        if os.path.exists(filepath):
-            return f"/media/{filename}"
-    except Exception as e:
-        print(f"[TARS Web] Error en generacion de audio TTS: {e}")
+    async with TTS_LOCK:
+        cached_url = TTS_CACHE.get(clean_text)
+        if cached_url:
+            cached_path = os.path.join(MEDIA_DIR, os.path.basename(cached_url))
+            if os.path.exists(cached_path):
+                return cached_url
+
+        filename = f"reply_{uuid.uuid4().hex[:8]}.mp3"
+        filepath = os.path.join(MEDIA_DIR, filename)
+        try:
+            comm = edge_tts.Communicate(clean_text, TTS_VOICE, rate="-4%")
+            await comm.save(filepath)
+            if os.path.exists(filepath):
+                url = f"/media/{filename}"
+                TTS_CACHE[clean_text] = url
+                return url
+        except Exception as e:
+            print(f"[TARS Web] Error en generacion de audio TTS: {e}")
     return None
 
 def transcribe_wav(wav_path):
-    if not vosk_model or not os.path.exists(wav_path):
+    if not os.path.exists(wav_path):
+        return ""
+    # 1. Intentar primero reconocimiento de alta precision en español rioplatense (es-AR)
+    try:
+        import speech_recognition as sr
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio_data = recognizer.record(source)
+        text = recognizer.recognize_google(audio_data, language="es-AR")
+        if text and text.strip():
+            return text.strip()
+    except Exception as e:
+        print(f"[TARS Web] Fallback a Vosk offline ({e})")
+
+    # 2. Fallback offline con Vosk
+    if not vosk_model:
         return ""
     try:
         wf = wave.open(wav_path, "rb")
@@ -269,7 +299,7 @@ def get_devtools_ws_url():
         with open(port_file, "r") as f:
             port = f.readline().strip()
         req = urllib.request.Request(f"http://127.0.0.1:{port}/json/list")
-        with urllib.request.urlopen(req, timeout=0.2) as resp:
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
             targets = json.loads(resp.read().decode())
             for t in targets:
                 if t.get("type") == "page" and "127.0.0.1" in t.get("url", ""):
@@ -284,7 +314,7 @@ def eval_in_antigravity(js_expr):
     if not ws_url:
         return None
     try:
-        with connect(ws_url, open_timeout=0.3) as ws:
+        with connect(ws_url, open_timeout=2.0) as ws:
             req_id = int(time.time() * 1000) % 100000
             msg = {
                 "id": req_id,
@@ -295,7 +325,7 @@ def eval_in_antigravity(js_expr):
                 }
             }
             ws.send(json.dumps(msg))
-            res_str = ws.recv(timeout=0.5)
+            res_str = ws.recv(timeout=2.5)
             res = json.loads(res_str)
             result = res.get("result", {}).get("result", {})
             return result.get("value")
@@ -460,6 +490,18 @@ def send_to_antigravity_ide(text, target_chat_id=None):
                     time.sleep(0.5)
 
             with connect(ws_url, open_timeout=3) as ws:
+                # 0.5 Forzar foco emulado en Chromium para que funcione aunque la ventana este en segundo plano o pantalla apagada
+                try:
+                    ws.send(json.dumps({"id": 90, "method": "Page.bringToFront"}))
+                    ws.recv(timeout=0.5)
+                except Exception:
+                    pass
+                try:
+                    ws.send(json.dumps({"id": 91, "method": "Emulation.setFocusEmulationEnabled", "params": {"enabled": True}}))
+                    ws.recv(timeout=0.5)
+                except Exception:
+                    pass
+
                 # 1. Si Antigravity esta generando una respuesta (boton Stop visible), esperar a que termine (hasta 60s)
                 busy_expr = """(() => {
                     const stop = document.querySelector('button[aria-label*="Stop"], button[aria-label*="stop"], button[aria-label*="Detener"], button[aria-label*="detener"]');
@@ -527,6 +569,26 @@ def send_to_antigravity_ide(text, target_chat_id=None):
                 }))
                 ws.recv(timeout=1)
 
+                # 4.5 Verificar que el texto haya entrado en Lexical; si no, inyectar con execCommand('insertText')
+                verify_insert_expr = f"""(() => {{
+                    const el = document.querySelector('[aria-label="Message input"]');
+                    if (!el) return false;
+                    if (el.innerText.trim().length === 0) {{
+                        el.focus();
+                        document.execCommand('insertText', false, {json.dumps(text)});
+                    }}
+                    return el.innerText.trim().length > 0;
+                }})()"""
+                ws.send(json.dumps({
+                    "id": 1065,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": verify_insert_expr, "returnByValue": True}
+                }))
+                try:
+                    ws.recv(timeout=1)
+                except Exception:
+                    pass
+
                 # 5. Esperar de forma activa a que el boton de envio este habilitado y clickearlo (hasta 4s)
                 click_expr = """(() => {
                     const btn = document.querySelector('button[aria-label="Send message"]');
@@ -552,16 +614,16 @@ def send_to_antigravity_ide(text, target_chat_id=None):
                     except Exception:
                         pass
 
-                # Fallback por Enter si el boton no respondio pero esta el foco
+                # Fallback por Enter si el boton no respondio pero el texto estaba en el input
                 if not clicked:
                     ws.send(json.dumps({"id": 108, "method": "Input.dispatchKeyEvent", "params": {"type": "rawKeyDown", "windowsVirtualKeyCode": 13, "key": "Enter", "code": "Enter", "text": "\\r", "unmodifiedText": "\\r"}}))
                     ws.recv(timeout=1)
                     ws.send(json.dumps({"id": 109, "method": "Input.dispatchKeyEvent", "params": {"type": "keyUp", "windowsVirtualKeyCode": 13, "key": "Enter", "code": "Enter"}}))
                     ws.recv(timeout=1)
-                    # Verificar si al apretar enter se envio
+                    time.sleep(0.15)
                     check_empty_expr = """(() => {
-                        const el = document.querySelector('[aria-label="Message input"]');
-                        return el ? (el.innerText.trim() === '') : false;
+                        const stop = document.querySelector('button[aria-label*="Cancel"], button[aria-label*="Stop"], button[aria-label*="stop"]');
+                        return Boolean(stop);
                     })()"""
                     ws.send(json.dumps({"id": 110, "method": "Runtime.evaluate", "params": {"expression": check_empty_expr, "returnByValue": True}}))
                     try:
@@ -930,6 +992,7 @@ async def handle_sync(request):
     media = []
 
     active_id = await asyncio.to_thread(get_current_antigravity_convo_id) or ""
+    current_model = await asyncio.to_thread(get_current_antigravity_model) or ""
     chat_changed = bool(client_chat_id and active_id and client_chat_id != active_id)
 
     latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message)
@@ -957,6 +1020,7 @@ async def handle_sync(request):
             "media": media,
             "audio_url": audio_url,
             "chat_id": active_id,
+            "current_model": current_model,
             "chat_changed": chat_changed,
             "processing_info": proc_info,
             "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
@@ -967,6 +1031,7 @@ async def handle_sync(request):
         "has_new": False,
         "step_index": latest_idx,
         "chat_id": active_id,
+        "current_model": current_model,
         "chat_changed": False,
         "processing_info": proc_info,
         "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
@@ -1028,19 +1093,300 @@ async def handle_switch_chat(request):
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
+def get_current_antigravity_model():
+    js = """(() => {
+        const btn = document.querySelector('button[aria-label^="Select model"]');
+        return btn ? btn.innerText.trim().replace(/\\s+/g, ' ') : '';
+    })()"""
+    val = eval_in_antigravity(js)
+    return val if isinstance(val, str) else ""
+
+def get_antigravity_models():
+    current_model = get_current_antigravity_model()
+    eval_in_antigravity("""(() => {
+        const items = document.querySelectorAll('[role="menuitem"]');
+        if (!items.length) {
+            const btn = document.querySelector('button[aria-label^="Select model"]');
+            if (btn) btn.click();
+        }
+    })()""")
+    time.sleep(0.28)
+    js_read = """(() => {
+        const btn = document.querySelector('button[aria-label^="Select model"]');
+        const curr = btn ? btn.innerText.trim().replace(/\\s+/g, ' ') : '';
+        const items = Array.from(document.querySelectorAll('[role="menuitem"]'));
+        const models = [];
+        for (const el of items) {
+            const rawLines = (el.innerText || '').split('\\n').map(s => s.trim()).filter(Boolean);
+            if (!rawLines.length || rawLines[0] === 'View Usage') continue;
+            const baseEl = el.querySelector('[data-model-base]');
+            const name = baseEl ? baseEl.getAttribute('data-model-base') : rawLines[0];
+            const hasEffort = Boolean(baseEl) || el.getAttribute('aria-haspopup') === 'menu';
+            const effort = (hasEffort && rawLines.length > 1 && ['Low', 'Medium', 'High'].includes(rawLines[1])) ? rawLines[1] : '';
+            const badge = rawLines.find(x => x === 'Leaving Soon' || x === 'Notice') || '';
+            const active = curr.toLowerCase().startsWith(name.toLowerCase());
+            models.push({
+                name: name,
+                effort: effort,
+                has_effort: hasEffort,
+                badge: badge,
+                active: active
+            });
+        }
+        if (btn && items.length) btn.click();
+        return { current_model: curr, models: models };
+    })()"""
+    res = eval_in_antigravity(js_read)
+    if isinstance(res, dict) and res.get("models"):
+        return res
+    # Fallback list if menu couldn't open momentarily
+    default_models = [
+        {"name": "Gemini 3.8 Flash", "effort": "High", "has_effort": True, "badge": "", "active": "3.8" in current_model},
+        {"name": "Gemini 3.7 Flash", "effort": "Medium", "has_effort": True, "badge": "Leaving Soon", "active": "3.7" in current_model},
+        {"name": "Gemini 3.6 Flash", "effort": "Medium", "has_effort": True, "badge": "Leaving Soon", "active": "3.6" in current_model},
+        {"name": "Gemini 3.1 Pro", "effort": "Low", "has_effort": True, "badge": "Leaving Soon", "active": "3.1 Pro" in current_model},
+        {"name": "Claude Sonnet 4.6 (Thinking)", "effort": "", "has_effort": False, "badge": "", "active": "Sonnet" in current_model},
+        {"name": "Claude Opus 4.6 (Thinking)", "effort": "", "has_effort": False, "badge": "", "active": "Opus" in current_model},
+        {"name": "GPT-OSS 120B (Medium)", "effort": "", "has_effort": False, "badge": "", "active": "GPT-OSS" in current_model},
+    ]
+    return {"current_model": current_model, "models": default_models}
+
+def switch_antigravity_model(model_name, effort=None):
+    if not model_name:
+        return {"success": False, "error": "Nombre de modelo vacio"}
+    eval_in_antigravity("""(() => {
+        const items = document.querySelectorAll('[role="menuitem"]');
+        if (!items.length) {
+            const btn = document.querySelector('button[aria-label^="Select model"]');
+            if (btn) btn.click();
+        }
+    })()""")
+    time.sleep(0.3)
+    target_json = json.dumps(model_name.strip())
+    effort_json = json.dumps((effort or "").strip())
+    if effort:
+        # Open effort submenu with ArrowRight on the target model item
+        eval_in_antigravity(f"""(() => {{
+            const target = {target_json}.toLowerCase();
+            const items = Array.from(document.querySelectorAll('[role="menuitem"]'));
+            const item = items.find(el => (el.innerText || '').toLowerCase().includes(target));
+            if (item) {{
+                item.focus();
+                item.dispatchEvent(new KeyboardEvent('keydown', {{key: 'ArrowRight', code: 'ArrowRight', bubbles: true}}));
+            }}
+        }})()""")
+        time.sleep(0.28)
+        eval_in_antigravity(f"""(() => {{
+            const eff = {effort_json}.toLowerCase();
+            const items = Array.from(document.querySelectorAll('[role="menuitem"], [role="menuitemradio"]'));
+            const sub = items.find(el => (el.innerText || '').trim().toLowerCase() === eff);
+            if (sub) {{
+                sub.click();
+            }} else {{
+                const target = {target_json}.toLowerCase();
+                const mainItem = items.find(el => (el.innerText || '').toLowerCase().includes(target));
+                if (mainItem) mainItem.click();
+            }}
+        }})()""")
+    else:
+        eval_in_antigravity(f"""(() => {{
+            const target = {target_json}.toLowerCase();
+            const items = Array.from(document.querySelectorAll('[role="menuitem"]'));
+            const item = items.find(el => (el.innerText || '').toLowerCase().includes(target));
+            if (item) item.click();
+        }})()""")
+    time.sleep(0.3)
+    # Ensure menu is closed if still open
+    eval_in_antigravity("""(() => {
+        const items = document.querySelectorAll('[role="menuitem"]');
+        if (items.length) {
+            const btn = document.querySelector('button[aria-label^="Select model"]');
+            if (btn) btn.click();
+        }
+    })()""")
+    new_model = get_current_antigravity_model()
+    return {"success": True, "current_model": new_model or model_name}
+
+async def handle_get_models(request):
+    data = await asyncio.to_thread(get_antigravity_models)
+    return web.json_response(data)
+
+async def handle_switch_model(request):
+    try:
+        data = await request.json()
+        model_name = data.get("model") or data.get("name") or ""
+        effort = data.get("effort") or None
+        res = await asyncio.to_thread(switch_antigravity_model, model_name, effort)
+        return web.json_response(res)
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+NTFY_TOPIC = "tars_santiago_a03"
+VAPID_FILE = "/home/santiago/.gemini/config/vapid_keys.json"
+SUBSCRIPTIONS_FILE = "/home/santiago/.gemini/config/push_subscriptions.json"
+LAST_NOTIFIED_STEP = {"idx": 0}
+
+def get_vapid_keys():
+    try:
+        if os.path.exists(VAPID_FILE):
+            with open(VAPID_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def send_web_push_all(title, body, url="/", tag="tars-msg-latest"):
+    clean_body = clean_text_for_speech(body)[:240] if body else "Nuevo mensaje de Antigravity."
+    # 1. Enviar Web Push nativo (FCM / Chrome Android con pestaña cerrada)
+    try:
+        import base64
+        from py_vapid import Vapid01
+        from pywebpush import webpush, WebPushException
+        keys = get_vapid_keys()
+        priv_pem = keys.get("private_pem")
+        if priv_pem and os.path.exists(SUBSCRIPTIONS_FILE):
+            v = Vapid01.from_pem(priv_pem.encode("utf-8"))
+            raw_priv = base64.urlsafe_b64encode(
+                v.private_key.private_numbers().private_value.to_bytes(32, "big")
+            ).decode("ascii").rstrip("=")
+            with open(SUBSCRIPTIONS_FILE, "r") as f:
+                subs = json.load(f)
+            payload = json.dumps({
+                "title": title,
+                "body": clean_body,
+                "url": url,
+                "tag": tag,
+                "ts": int(time.time() * 1000)
+            })
+            valid_subs = []
+            for sub in subs:
+                try:
+                    webpush(
+                        subscription_info=sub,
+                        data=payload,
+                        vapid_private_key=raw_priv,
+                        vapid_claims={"sub": "mailto:santiagopradorodriguez@gmail.com"},
+                        ttl=3600
+                    )
+                    valid_subs.append(sub)
+                except WebPushException as ex:
+                    if ex.response is not None and ex.response.status_code in (404, 410):
+                        continue
+                    valid_subs.append(sub)
+                except Exception as e:
+                    print(f"[TARS Web] Error WebPush individual: {e}")
+                    valid_subs.append(sub)
+            with open(SUBSCRIPTIONS_FILE, "w") as f:
+                json.dump(valid_subs, f)
+    except Exception as e:
+        print(f"[TARS Web] Error general en WebPush: {e}")
+
+    # 2. Enviar también al canal ntfy.sh por si usa la app ntfy
+    try:
+        ascii_title = title.encode("ascii", errors="ignore").decode("ascii").strip() or "TARS - Antigravity"
+        req = urllib.request.Request(
+            f"https://ntfy.sh/{NTFY_TOPIC}",
+            data=clean_body.encode("utf-8"),
+            headers={
+                "Title": ascii_title,
+                "Priority": "high",
+                "Tags": "robot,speech_balloon",
+                "Click": "https://100.x.x.a:8443"
+            },
+            method="POST"
+        )
+        urllib.request.urlopen(req, timeout=3)
+    except Exception as e:
+        print(f"[TARS Web] Error enviando push ntfy: {e}")
+
+async def handle_vapid_public_key(request):
+    keys = get_vapid_keys()
+    return web.json_response({"public_key": keys.get("public_key", "")})
+
+async def handle_push_subscribe(request):
+    try:
+        sub = await request.json()
+        if not sub or "endpoint" not in sub:
+            return web.json_response({"success": False, "error": "Invalid subscription"}, status=400)
+        subs = []
+        if os.path.exists(SUBSCRIPTIONS_FILE):
+            try:
+                with open(SUBSCRIPTIONS_FILE, "r") as f:
+                    subs = json.load(f)
+            except Exception:
+                subs = []
+        subs = [s for s in subs if s.get("endpoint") != sub.get("endpoint")]
+        subs.append(sub)
+        with open(SUBSCRIPTIONS_FILE, "w") as f:
+            json.dump(subs, f)
+        print(f"[TARS Web] Celular suscripto a Web Push (total={len(subs)})")
+        return web.json_response({"success": True, "count": len(subs)})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+async def handle_sw(request):
+    sw_path = os.path.join(WEB_DIR, "sw.js")
+    if os.path.exists(sw_path):
+        return web.FileResponse(sw_path, headers={
+            "Content-Type": "application/javascript",
+            "Service-Worker-Allowed": "/",
+            "Cache-Control": "no-cache"
+        })
+    return web.Response(text="SW no encontrado", status=404)
+
+async def handle_test_notify(request):
+    delay = 0
+    try:
+        body = await request.json()
+        delay = float(body.get("delay", 0))
+    except Exception:
+        pass
+
+    async def _delayed_push():
+        if delay > 0:
+            await asyncio.sleep(delay)
+        await asyncio.to_thread(
+            send_web_push_all,
+            "🤖 TARS • Antigravity",
+            "¡Hola! Esta notificación llegó en segundo plano con la pestaña cerrada, igual que un mensaje de WhatsApp."
+        )
+
+    asyncio.create_task(_delayed_push())
+    return web.json_response({"success": True, "topic": NTFY_TOPIC, "delay": delay})
+
 async def handle_manifest(request):
     manifest_path = os.path.join(WEB_DIR, "manifest.json")
     if os.path.exists(manifest_path):
         return web.FileResponse(manifest_path, headers={"Content-Type": "application/json"})
     return web.Response(text="Manifest no encontrado", status=404)
 
+async def handle_tunnel_url(request):
+    tunnel_url = ""
+    try:
+        if os.path.exists("/tmp/cloudflared.log"):
+            with open("/tmp/cloudflared.log", "r") as f:
+                content = f.read()
+            m = re.search(r"https://[-a-z0-9.]*\.trycloudflare\.com", content)
+            if m:
+                tunnel_url = m.group(0)
+    except Exception:
+        pass
+    return web.json_response({"tunnel_url": tunnel_url})
+
 def init_app():
     app = web.Application()
     app.router.add_get("/", handle_index)
+    app.router.add_get("/sw.js", handle_sw)
     app.router.add_get("/manifest.json", handle_manifest)
+    app.router.add_get("/api/tunnel_url", handle_tunnel_url)
+    app.router.add_get("/api/vapid_public_key", handle_vapid_public_key)
+    app.router.add_post("/api/push_subscribe", handle_push_subscribe)
     app.router.add_get("/api/chats", handle_get_chats)
     app.router.add_post("/api/switch_chat", handle_switch_chat)
+    app.router.add_get("/api/models", handle_get_models)
+    app.router.add_post("/api/switch_model", handle_switch_model)
     app.router.add_post("/api/toggle_pc_sound", handle_toggle_pc_sound)
+    app.router.add_post("/api/test_notify", handle_test_notify)
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/api/audio", handle_audio)
     app.router.add_get("/api/sync", handle_sync)
@@ -1083,8 +1429,11 @@ def ensure_ssl_certificates(local_ip, tailscale_ip=None):
             needs_gen = True
 
     if needs_gen:
+        host_name = socket.gethostname()
         san_parts = [
             "DNS:pop-os.local",
+            f"DNS:{host_name}.local",
+            f"DNS:{host_name}",
             "DNS:localhost",
             "IP:127.0.0.1",
             f"IP:{local_ip}"
@@ -1107,35 +1456,150 @@ def ensure_ssl_certificates(local_ip, tailscale_ip=None):
         except Exception as e:
             print(f"[TARS Web] Error generando certificado SSL: {e}")
 
-def main():
+async def _pipe_stream(reader, writer):
+    try:
+        while True:
+            data = await reader.read(65536)
+            if not data:
+                break
+            writer.write(data)
+            await writer.drain()
+    except Exception:
+        pass
+    finally:
+        try:
+            writer.close()
+        except Exception:
+            pass
+
+async def _handle_dual_8443(client_reader, client_writer, internal_tls_port, default_host):
+    try:
+        first_chunk = await asyncio.wait_for(client_reader.read(4096), timeout=5.0)
+        if not first_chunk:
+            client_writer.close()
+            return
+        # 0x16 = TLS Handshake (ClientHello)
+        if first_chunk[0] == 0x16:
+            backend_reader, backend_writer = await asyncio.open_connection("127.0.0.1", internal_tls_port)
+            backend_writer.write(first_chunk)
+            await backend_writer.drain()
+            await asyncio.gather(
+                _pipe_stream(client_reader, backend_writer),
+                _pipe_stream(backend_reader, client_writer)
+            )
+        else:
+            # Plain HTTP on 8443 -> Redirect to https://
+            req_text = first_chunk.decode("latin-1", errors="ignore")
+            host_hdr = f"{default_host}:8443"
+            path = "/"
+            lines = req_text.splitlines()
+            if lines:
+                parts = lines[0].split()
+                if len(parts) >= 2:
+                    path = parts[1]
+            for line in lines[1:]:
+                if line.lower().startswith("host:"):
+                    host_hdr = line.split(":", 1)[1].strip()
+                    if ":" not in host_hdr:
+                        host_hdr = f"{host_hdr}:8443"
+                    break
+            location = f"https://{host_hdr}{path}"
+            resp = (
+                f"HTTP/1.1 302 Found\r\n"
+                f"Location: {location}\r\n"
+                f"Content-Length: 0\r\n"
+                f"Connection: close\r\n\r\n"
+            )
+            client_writer.write(resp.encode("latin-1"))
+            await client_writer.drain()
+            client_writer.close()
+    except Exception:
+        try:
+            client_writer.close()
+        except Exception:
+            pass
+
+async def watch_transcript_for_push():
+    # Inicializar en el paso actual para no re-notificar mensajes viejos al arrancar
+    try:
+        idx, _, _ = await asyncio.to_thread(get_latest_transcript_message)
+        LAST_NOTIFIED_STEP["idx"] = idx
+    except Exception:
+        pass
+
+    while True:
+        await asyncio.sleep(1.5)
+        try:
+            latest_idx, latest_msg, _ = await asyncio.to_thread(get_latest_transcript_message)
+            if latest_idx > LAST_NOTIFIED_STEP["idx"] and latest_msg:
+                LAST_NOTIFIED_STEP["idx"] = latest_idx
+                await asyncio.to_thread(
+                    send_web_push_all,
+                    "🤖 TARS • Antigravity",
+                    latest_msg,
+                    "/",
+                    f"tars-step-{latest_idx}"
+                )
+        except Exception as e:
+            print(f"[TARS Web] Error en watch_transcript_for_push: {e}")
+
+async def async_main():
     port = 8443
-    host = "0.0.0.0"
+    internal_tls_port = 8444
+    http_port = 8080
     app = init_app()
 
     local_ip = get_local_ip()
     ts_ip = get_tailscale_ip()
     ensure_ssl_certificates(local_ip, ts_ip)
 
+    # Iniciar monitor autonomo de respuestas para enviar Push aunque el navegador del celular este cerrado
+    asyncio.create_task(watch_transcript_for_push())
+
+    # Publicar alias pop-os.local por mDNS en la red local
+    try:
+        subprocess.Popen(
+            ["avahi-publish", "-a", "-R", "pop-os.local", local_ip],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+    except Exception:
+        pass
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
     ssl_context = None
     if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_context.load_cert_chain(CERT_FILE, KEY_FILE)
-        print(f"[TARS Web] SSL habilitado. Servidor listo en:")
+
+    if ssl_context:
+        tls_site = web.TCPSite(runner, "127.0.0.1", internal_tls_port, ssl_context=ssl_context)
+        await tls_site.start()
+        default_host = ts_ip or local_ip
+        server_8443 = await asyncio.start_server(
+            lambda r, w: _handle_dual_8443(r, w, internal_tls_port, default_host),
+            host=["0.0.0.0", "::"],
+            port=port
+        )
+        http_site = web.TCPSite(runner, "0.0.0.0", http_port)
+        await http_site.start()
+        print(f"[TARS Web] SSL + Auto-Redirect HTTP->HTTPS habilitado en puerto {port} (y HTTP en {http_port}):")
         print(f"           - https://{local_ip}:{port}")
         print(f"           - https://pop-os.local:{port}")
         if ts_ip:
             print(f"           - https://{ts_ip}:{port} (Remoto Tailscale)")
-        
-        # Notificacion visual en Pop!_OS para saber la direccion de un vistazo
-        try:
-            msg = f"https://{local_ip}:{port}\no https://pop-os.local:{port}"
-            subprocess.Popen(["notify-send", "TARS Móvil Listo", msg, "-t", "8000"])
-        except Exception:
-            pass
+            print(f"           - http://{ts_ip}:{http_port} (HTTP directo)")
+        await server_8443.serve_forever()
     else:
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
         print(f"[TARS Web] Servidor listo (sin SSL) en: http://{local_ip}:{port}")
+        while True:
+            await asyncio.sleep(3600)
 
-    web.run_app(app, host=host, port=port, ssl_context=ssl_context)
+def main():
+    asyncio.run(async_main())
 
 if __name__ == "__main__":
     main()

@@ -113,6 +113,7 @@ function renderMarkdown(text) {
 
     // 9. Links markdown [texto](url)
     processed = processed.replace(/\[(.*?)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    processed = processed.replace(/\[(.*?)\]\(file:\/\/\/[^\)]+\)/g, '$1');
 
     // 10. Parrafos y saltos de linea
     processed = processed.replace(/\n{2,}/g, '</p><p>');
@@ -133,13 +134,38 @@ function renderMarkdown(text) {
     return processed;
 }
 
-// Desbloquear audio en movil al primer toque en la pantalla
+// Desbloquear audio en movil y mantener viva la ejecucion en segundo plano (con Chrome minimizado)
 let audioUnlocked = false;
+let bgKeepAliveAudio = null;
+
+function updateMediaSessionNotification(textPreview) {
+    if ('mediaSession' in navigator) {
+        try {
+            const chatName = (typeof currentChatTitle !== 'undefined' && currentChatTitle && currentChatTitle.innerText)
+                ? currentChatTitle.innerText
+                : 'Antigravity';
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: textPreview || 'TARS Conectado en segundo plano',
+                artist: `🤖 TARS • ${chatName}`,
+                album: 'Antigravity Móvil',
+                artwork: [
+                    { src: '/static/icon-192.png', sizes: '192x192', type: 'image/png' },
+                    { src: '/static/icon-512.png', sizes: '512x512', type: 'image/png' }
+                ]
+            });
+        } catch (e) {}
+    }
+}
+
 function unlockMobileAudio() {
     if (!audioUnlocked) {
-        const silentAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
-        silentAudio.play().then(() => {
+        // WAV silencioso de 1 segundo en loop para que Android no congele la pestaña al salir de Chrome
+        bgKeepAliveAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
+        bgKeepAliveAudio.loop = true;
+        bgKeepAliveAudio.volume = 0.01;
+        bgKeepAliveAudio.play().then(() => {
             audioUnlocked = true;
+            updateMediaSessionNotification('Sistemas listos • Escuchando respuestas');
         }).catch(() => {});
     }
 }
@@ -644,16 +670,377 @@ if (nextChatBtn) {
     nextChatBtn.addEventListener('click', () => switchAntigravityChat('siguiente'));
 }
 
-// Sincronizacion en tiempo real con la sesion activa de Antigravity
+// ===== SELECTOR DE MODELOS DE IA DE ANTIGRAVITY =====
+const modelSelectorBtn = document.getElementById('model-selector-btn');
+const currentModelTitle = document.getElementById('current-model-title');
+const modelsModal = document.getElementById('models-modal');
+const modelsModalOverlay = document.getElementById('models-modal-overlay');
+const modelsModalClose = document.getElementById('models-modal-close');
+const modelsList = document.getElementById('models-list');
+
+function formatShortModelName(fullName) {
+    if (!fullName) return 'Modelo IA';
+    return fullName
+        .replace(/^Gemini\s+/i, 'G-')
+        .replace(/^Claude\s+/i, '')
+        .replace(/\(Thinking\)/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function updateCurrentModelUI(modelStr) {
+    if (modelStr && currentModelTitle) {
+        currentModelTitle.innerText = formatShortModelName(modelStr);
+        if (modelSelectorBtn) {
+            modelSelectorBtn.title = `Modelo actual: ${modelStr}`;
+        }
+    }
+}
+
+function openModelsModal() {
+    if (!modelsModal) return;
+    modelsModal.classList.remove('hidden');
+    loadModelsList();
+}
+
+function closeModelsModal() {
+    if (!modelsModal) return;
+    modelsModal.classList.add('hidden');
+}
+
+async function loadModelsList() {
+    if (!modelsList) return;
+    modelsList.innerHTML = '<div class="loading-chats">Consultando modelos disponibles...</div>';
+    try {
+        const resp = await fetch('/api/models');
+        const data = await resp.json();
+        const models = data.models || [];
+        if (data.current_model) {
+            updateCurrentModelUI(data.current_model);
+        }
+        if (models.length === 0) {
+            modelsList.innerHTML = '<div class="empty-chats">No se pudieron leer los modelos</div>';
+            return;
+        }
+        modelsList.innerHTML = '';
+        models.forEach(m => {
+            const card = document.createElement('div');
+            card.className = `model-item ${m.active ? 'active' : ''}`;
+
+            const top = document.createElement('div');
+            top.className = 'model-item-top';
+            let statusBadge = m.active
+                ? '<span class="chat-item-badge">En uso</span>'
+                : (m.effort ? `<span style="font-size:0.75rem;color:var(--text-muted);">${m.effort}</span>` : '');
+            top.innerHTML = `
+                <span class="model-item-name">${m.name}</span>
+                ${statusBadge}
+            `;
+            card.appendChild(top);
+
+            if (m.has_effort) {
+                const pills = document.createElement('div');
+                pills.className = 'effort-pills';
+                ['Low', 'Medium', 'High'].forEach(eff => {
+                    const pill = document.createElement('button');
+                    pill.className = `effort-pill ${(m.active && (data.current_model || '').toLowerCase().includes(eff.toLowerCase())) || (!m.active && m.effort === eff) ? 'active' : ''}`;
+                    pill.innerText = eff === 'Low' ? 'Rápido (Low)' : (eff === 'Medium' ? 'Medio (Med)' : 'Máximo (High)');
+                    pill.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        switchAntigravityModel(m.name, eff);
+                    });
+                    pills.appendChild(pill);
+                });
+                card.appendChild(pills);
+            }
+
+            card.addEventListener('click', () => {
+                switchAntigravityModel(m.name, m.effort || null);
+            });
+            modelsList.appendChild(card);
+        });
+    } catch (e) {
+        modelsList.innerHTML = '<div class="empty-chats">Error conectando con el servidor</div>';
+    }
+}
+
+async function switchAntigravityModel(modelName, effort = null) {
+    closeModelsModal();
+    micStatusLabel.innerText = `Cambiando a ${modelName}...`;
+    try {
+        const resp = await fetch('/api/switch_model', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: modelName, effort: effort })
+        });
+        const res = await resp.json();
+        if (res && res.success) {
+            const finalName = res.current_model || (effort ? `${modelName} ${effort}` : modelName);
+            updateCurrentModelUI(finalName);
+            showWhatsAppToast('🧠 Modelo IA actualizado', `Ahora estás usando: ${finalName}`);
+            micStatusLabel.innerText = 'Toca para hablar';
+        } else {
+            alert('No se pudo cambiar el modelo');
+            micStatusLabel.innerText = 'Toca para hablar';
+        }
+    } catch (e) {
+        alert('Error cambiando el modelo en la PC');
+        micStatusLabel.innerText = 'Toca para hablar';
+    }
+}
+
+if (modelSelectorBtn) {
+    modelSelectorBtn.addEventListener('click', openModelsModal);
+}
+if (modelsModalClose) {
+    modelsModalClose.addEventListener('click', closeModelsModal);
+}
+if (modelsModalOverlay) {
+    modelsModalOverlay.addEventListener('click', closeModelsModal);
+}
+
+// ===== SISTEMA DE NOTIFICACIONES PUSH REALES (ESTILO WHATSAPP CON PESTAÑA CERRADA) =====
+const notifyToggleBtn = document.getElementById('notify-toggle-btn');
+const notifyBtnLabel = document.getElementById('notify-btn-label');
+const waToastBanner = document.getElementById('wa-toast-banner');
+const waToastTitle = document.getElementById('wa-toast-title');
+const waToastText = document.getElementById('wa-toast-text');
+
+let swRegistration = null;
+let waToastTimer = null;
+let wakeLockSentinel = null;
+
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+}
+
+async function setupWebPushSubscription() {
+    if (!('serviceWorker' in navigator)) return false;
+    try {
+        swRegistration = await navigator.serviceWorker.register('/sw.js');
+        await navigator.serviceWorker.ready;
+        if (!('PushManager' in window)) return false;
+
+        const keyResp = await fetch('/api/vapid_public_key');
+        const keyData = await keyResp.json();
+        if (!keyData.public_key) return false;
+
+        let sub = await swRegistration.pushManager.getSubscription();
+        if (!sub) {
+            sub = await swRegistration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(keyData.public_key)
+            });
+        }
+        await fetch('/api/push_subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(sub)
+        });
+        isPushSubscribed = true;
+        updateNotifyBtnUI(true);
+        return true;
+    } catch (e) {
+        console.log('WebPush requiere HTTPS valido o app ntfy:', e);
+        return false;
+    }
+}
+
+let isPushSubscribed = false;
+
+function updateNotifyBtnUI(pushActive = false) {
+    if (!notifyToggleBtn) return;
+    if (pushActive || ('Notification' in window && Notification.permission === 'granted')) {
+        notifyToggleBtn.classList.add('active');
+        if (notifyBtnLabel) notifyBtnLabel.innerText = 'ON';
+    } else {
+        notifyToggleBtn.classList.remove('active');
+        if (notifyBtnLabel) notifyBtnLabel.innerText = 'OFF';
+    }
+}
+updateNotifyBtnUI();
+if ('Notification' in window && Notification.permission === 'granted') {
+    setupWebPushSubscription();
+}
+
+function cleanPreviewText(raw) {
+    if (!raw) return 'Nuevo mensaje recibido';
+    return raw
+        .replace(/```[\s\S]*?```/g, '[Código] ')
+        .replace(/[*#_`~>]/g, '')
+        .replace(/\[(.*?)\]\([^\)]+\)/g, '$1')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 160);
+}
+
+function showWhatsAppToast(title, bodyText) {
+    if (!waToastBanner) return;
+    if (waToastTitle) waToastTitle.innerText = title;
+    if (waToastText) waToastText.innerText = bodyText;
+    waToastBanner.classList.remove('hidden');
+    if (waToastTimer) clearTimeout(waToastTimer);
+    waToastTimer = setTimeout(() => {
+        waToastBanner.classList.add('hidden');
+    }, 5500);
+}
+
+if (waToastBanner) {
+    waToastBanner.addEventListener('click', () => {
+        waToastBanner.classList.add('hidden');
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    });
+}
+
+async function triggerPhoneNotification(rawContent, customTitle = null, stepIndex = null) {
+    const chatName = (currentChatTitle && currentChatTitle.innerText) ? currentChatTitle.innerText : 'Antigravity';
+    const title = customTitle || `🤖 TARS • ${chatName}`;
+    const body = cleanPreviewText(rawContent);
+
+    updateMediaSessionNotification(body);
+    try {
+        const chime = new Audio('/static/wa_notify.wav');
+        chime.volume = 0.85;
+        chime.play().catch(() => {});
+    } catch (e) {}
+
+    if (navigator.vibrate) {
+        navigator.vibrate([300, 120, 300, 120, 400]);
+    }
+    showWhatsAppToast(title, body);
+
+    if (isPushSubscribed) {
+        return;
+    }
+
+    if ('Notification' in window && Notification.permission === 'granted') {
+        const notifTag = stepIndex ? `tars-step-${stepIndex}` : 'tars-msg-latest';
+        const options = {
+            body: body,
+            icon: '/static/icon-192.png',
+            badge: '/static/icon-192.png',
+            vibrate: [300, 120, 300, 120, 400],
+            requireInteraction: true,
+            tag: notifTag,
+            renotify: false
+        };
+        try {
+            if (swRegistration && swRegistration.showNotification) {
+                const existing = await swRegistration.getNotifications({ tag: notifTag });
+                if (!existing || existing.length === 0) {
+                    await swRegistration.showNotification(title, options);
+                }
+                return;
+            }
+        } catch (e) {}
+        try {
+            new Notification(title, options);
+        } catch (e) {}
+    }
+}
+
+async function acquireWakeLock(enable) {
+    if (!('wakeLock' in navigator)) return;
+    try {
+        if (enable && !wakeLockSentinel) {
+            wakeLockSentinel = await navigator.wakeLock.request('screen');
+        } else if (!enable && wakeLockSentinel) {
+            await wakeLockSentinel.release();
+            wakeLockSentinel = null;
+        }
+    } catch (e) {}
+}
+
+async function activateNotificationsAndTest() {
+    unlockMobileAudio();
+    if (navigator.vibrate) navigator.vibrate([300, 120, 300, 120, 400]);
+
+    if ('Notification' in window && Notification.permission !== 'granted') {
+        try {
+            await Notification.requestPermission();
+        } catch (e) {}
+    }
+
+    const pushOk = await setupWebPushSubscription();
+    if (!pushOk && !window.location.hostname.endsWith('.trycloudflare.com')) {
+        try {
+            const r = await fetch('/api/tunnel_url');
+            const d = await r.json();
+            if (d.tunnel_url) {
+                window.location.href = d.tunnel_url;
+                return;
+            }
+        } catch (e) {}
+    }
+
+    updateNotifyBtnUI(pushOk);
+    showWhatsAppToast(
+        '🤖 TARS • Prueba en 5 seg',
+        'Salí de Chrome a la pantalla principal ahora: en 5 segundos te vibra y llega la notificación arriba.'
+    );
+    try {
+        await fetch('/api/test_notify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ delay: 5 })
+        });
+    } catch (e) {}
+}
+
+if (notifyToggleBtn) {
+    notifyToggleBtn.addEventListener('click', activateNotificationsAndTest);
+}
+
+if (waToastBanner) {
+    waToastBanner.addEventListener('click', () => {
+        if ('Notification' in window && Notification.permission !== 'granted') {
+            activateNotificationsAndTest();
+        }
+    });
+}
+
+if ('Notification' in window && Notification.permission !== 'granted') {
+    setTimeout(() => {
+        showWhatsAppToast(
+            '🔔 TOCA ACÁ PARA ACTIVAR ALERTAS',
+            'Toca este cartel verde para habilitar las notificaciones y vibración de Android.'
+        );
+    }, 800);
+}
+
+document.addEventListener('click', () => {
+    if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission().then(() => {
+            updateNotifyBtnUI();
+            setupWebPushSubscription();
+        }).catch(() => {});
+    }
+}, { once: true });
+
+// Sincronizacion en tiempo real con la sesion activa de Antigravity (con lock anti-duplicados)
 let currentSyncIndex = 0;
+let isSyncing = false;
+const renderedStepIndices = new Set();
 
 async function syncWithAntigravity() {
+    if (isSyncing) return;
+    isSyncing = true;
     try {
         const resp = await fetch(`/api/sync?last_index=${currentSyncIndex}&chat_id=${encodeURIComponent(activeChatId)}`);
         const data = await resp.json();
 
         if (data.chat_id) {
             activeChatId = data.chat_id;
+        }
+        if (data.current_model) {
+            updateCurrentModelUI(data.current_model);
         }
 
         if (typeof data.pc_audio_muted === 'boolean' && data.pc_audio_muted !== isPcSoundMuted) {
@@ -663,34 +1050,45 @@ async function syncWithAntigravity() {
         if (data.processing_info && data.processing_info.is_processing) {
             updateProcessingBubble(data.processing_info);
             micStatusLabel.innerText = "⏳ " + (data.processing_info.tool_action || "Pensando...");
+            acquireWakeLock(true);
         } else {
             removeProcessingBubble();
+            acquireWakeLock(false);
             if (!isRecording && micStatusLabel.innerText.startsWith("⏳ ")) {
                 micStatusLabel.innerText = 'Toca para hablar';
             }
         }
 
         if (data.chat_changed) {
-            // Cambio de chat detectado
             loadInitialChatTitle();
+            renderedStepIndices.clear();
             currentSyncIndex = data.step_index;
+            if (data.step_index) renderedStepIndices.add(data.step_index);
             if (data.content) {
                 appendMessage('assistant', data.content, data.media, data.audio_url, false);
             }
-        } else if (data.has_new && data.step_index > currentSyncIndex) {
+        } else if (data.has_new && data.step_index > currentSyncIndex && !renderedStepIndices.has(data.step_index)) {
             removeProcessingBubble();
+            const isFirstLoad = (currentSyncIndex === 0);
             currentSyncIndex = data.step_index;
-            appendMessage('assistant', data.content, data.media, data.audio_url, true);
+            renderedStepIndices.add(data.step_index);
+            appendMessage('assistant', data.content, data.media, data.audio_url, !isFirstLoad);
+            if (!isFirstLoad && data.content) {
+                triggerPhoneNotification(data.content, null, data.step_index);
+            }
             micStatusLabel.innerText = 'Toca para hablar';
         } else if (data.step_index && currentSyncIndex === 0) {
-            // Inicializar al ultimo indice para no duplicar historico viejo
             currentSyncIndex = data.step_index;
+            renderedStepIndices.add(data.step_index);
         }
     } catch (e) {
         // Silencioso ante breves desconexiones
+    } finally {
+        isSyncing = false;
     }
 }
 
 loadInitialChatTitle();
 setInterval(syncWithAntigravity, 1500);
 syncWithAntigravity();
+

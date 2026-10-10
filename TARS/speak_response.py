@@ -13,6 +13,47 @@ os.environ["SSL_CERT_FILE"] = certifi.where()
 VOICE = "es-AR-TomasNeural"
 OUTPUT_FILE = "/tmp/antigravity_response.mp3"
 
+def clean_latex_math(math_str):
+    math_str = re.sub(r"\\frac\{([^{}]+)\}\{([^{}]+)\}", r" \1 sobre \2 ", math_str)
+    math_str = re.sub(r"\\sqrt\{([^{}]+)\}", r" raíz de \1 ", math_str)
+    math_str = re.sub(r"\|([^|]+)\|", r" módulo de \1 ", math_str)
+    math_str = re.sub(r"\\(?:approx)\b", " aproximadamente ", math_str)
+    math_str = re.sub(r"\\(?:neq|ne)\b", " distinto de ", math_str)
+    math_str = re.sub(r"\\(?:leq|le)\b", " menor o igual a ", math_str)
+    math_str = re.sub(r"\\(?:geq|ge)\b", " mayor o igual a ", math_str)
+    math_str = re.sub(r"\\times\b", " por ", math_str)
+    math_str = re.sub(r"\\pm\b", " más o menos ", math_str)
+    math_str = re.sub(r"\\cdot\b", " por ", math_str)
+    math_str = re.sub(r"\\in\b", " en ", math_str)
+    math_str = re.sub(r"\\max\b", " máximo ", math_str)
+    math_str = re.sub(r"\\min\b", " mínimo ", math_str)
+    math_str = re.sub(r"\\sum\b", " suma ", math_str)
+    math_str = re.sub(r"\\int\b", " integral ", math_str)
+    math_str = re.sub(r"\\alpha\b", " alfa ", math_str)
+    math_str = re.sub(r"\\beta\b", " beta ", math_str)
+    math_str = re.sub(r"\\gamma\b", " gamma ", math_str)
+    math_str = re.sub(r"\\delta\b", " delta ", math_str)
+    math_str = re.sub(r"\\theta\b", " tita ", math_str)
+    math_str = re.sub(r"\\mu\b", " micro ", math_str)
+    math_str = re.sub(r"\\pi\b", " pi ", math_str)
+    math_str = re.sub(r"\\sigma\b", " sigma ", math_str)
+    math_str = re.sub(r"\\tau\b", " tau ", math_str)
+    math_str = re.sub(r"\\omega\b", " omega ", math_str)
+    math_str = re.sub(r"\\(?:text|mathbf|mathit|mathrm|mathcal|tilde|hat|bar)\{([^{}]*)\}", r" \1 ", math_str)
+    math_str = re.sub(r"\^\{2\}|\^2", " al cuadrado ", math_str)
+    math_str = re.sub(r"\^\{3\}|\^3", " al cubo ", math_str)
+    math_str = re.sub(r"\^\{([^{}]*)\}", r" elevado a la \1 ", math_str)
+    math_str = re.sub(r"\^([0-9a-zA-Z])", r" elevado a la \1 ", math_str)
+    math_str = re.sub(r"_\{([^{}]*)\}", r" sub \1 ", math_str)
+    math_str = re.sub(r"_([0-9a-zA-Z])", r" sub \1 ", math_str)
+    math_str = re.sub(r"=", " es igual a ", math_str)
+    math_str = re.sub(r"\+", " más ", math_str)
+    math_str = re.sub(r"\\(?:left|right|big|Big)\b", "", math_str)
+    math_str = re.sub(r"\\[a-zA-Z]+", " ", math_str)
+    math_str = re.sub(r"[{}\[\]()]", " ", math_str)
+    math_str = math_str.replace("_", " ")
+    return " " + math_str + " "
+
 def clean_text_for_speech(text):
     if not text:
         return ""
@@ -117,7 +158,7 @@ def main():
             if os.path.exists(state_file):
                 with open(state_file, "r") as sf:
                     sdata = json.load(sf)
-                    if sdata.get("mode") == "off" or sdata.get("mute_pc_audio") is True:
+                    if sdata.get("mode") == "off" or sdata.get("mute_pc_audio") is True or sdata.get("pc_audio_muted") is True:
                         print("{}")
                         return
         except Exception:
@@ -147,6 +188,23 @@ def main():
         if last_content:
             clean = clean_text_for_speech(last_content)
             if clean:
+                # Enviar notificacion push instantanea al celular (ntfy.sh/tars_santiago_a03) incluso si la pantalla esta apagada
+                try:
+                    preview = clean[:220]
+                    subprocess.Popen(
+                        [
+                            "curl", "-s",
+                            "-H", "Title: TARS - Nuevo mensaje",
+                            "-H", "Priority: high",
+                            "-H", "Tags: robot,speech_balloon",
+                            "-H", "Click: https://100.x.x.a:8443",
+                            "-d", preview,
+                            "https://ntfy.sh/tars_santiago_a03"
+                        ],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+                except Exception:
+                    pass
                 # Limit length to ~1000 characters so it doesn't speak for 10 minutes on huge responses
                 if len(clean) > 1000:
                     cut = clean[:1000]
