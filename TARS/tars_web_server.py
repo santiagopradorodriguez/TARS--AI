@@ -472,6 +472,7 @@ def switch_antigravity_chat(target):
 
 import threading
 _ide_send_lock = threading.Lock()
+LAST_CANCEL_TIMESTAMP = 0.0
 
 def cdp_call(ws, req_id, method, params=None, timeout=1.5):
     msg = {"id": req_id, "method": method}
@@ -488,13 +489,115 @@ def cdp_call(ws, req_id, method, params=None, timeout=1.5):
             pass
     return {}
 
+def cancel_antigravity_ide():
+    global LAST_CANCEL_TIMESTAMP
+    LAST_CANCEL_TIMESTAMP = time.time()
+    # Detener también cualquier voz TTS que esté sonando en la PC
+    try:
+        subprocess.run(["pkill", "-9", "-f", "ffplay.*antigravity_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["pkill", "-9", "-f", "tars_player.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["pkill", "-9", "-f", "paplay.*antigravity_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+    ws_url = get_devtools_ws_url()
+    if not ws_url:
+        return {"success": False, "error": "No se encontró conexión CDP con Antigravity"}
+
+    try:
+        with connect(ws_url, open_timeout=2.5) as ws:
+            try:
+                ws.send(json.dumps({"id": 900, "method": "Page.bringToFront"}))
+                ws.recv(timeout=0.4)
+            except Exception:
+                pass
+            try:
+                ws.send(json.dumps({"id": 901, "method": "Emulation.setFocusEmulationEnabled", "params": {"enabled": True}}))
+                ws.recv(timeout=0.4)
+            except Exception:
+                pass
+
+            cancel_js = """(() => {
+                const selectors = [
+                    '[data-tooltip-id="input-send-button-cancel-tooltip"]',
+                    'button[aria-label*="Cancel"]',
+                    'button[aria-label="Stop execution"]',
+                    'button[aria-label*="Stop"]',
+                    'button[aria-label*="stop"]',
+                    'button[aria-label*="Detener"]'
+                ];
+                let clicked = false;
+                for (const sel of selectors) {
+                    const btns = Array.from(document.querySelectorAll(sel));
+                    for (const btn of btns) {
+                        const r = btn.getBoundingClientRect();
+                        if (!btn.disabled && r.width > 0 && r.height > 0) {
+                            btn.click();
+                            clicked = true;
+                        }
+                    }
+                    if (clicked) break;
+                }
+                const ed = document.querySelector('[aria-label="Message input"]');
+                if (ed && ed.innerText.trim().length > 0) {
+                    ed.focus();
+                    document.execCommand('selectAll', false, null);
+                    document.execCommand('delete', false, null);
+                }
+                return clicked;
+            })()"""
+
+            stopped = False
+            for attempt in range(8):
+                ws.send(json.dumps({
+                    "id": 910 + attempt,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": cancel_js, "returnByValue": True}
+                }))
+                try:
+                    res = json.loads(ws.recv(timeout=0.8))
+                    if res.get("result", {}).get("result", {}).get("value") is True:
+                        stopped = True
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.15)
+
+            if not stopped:
+                # Fallback: enviar atajo nativo Ctrl+D (Cancel en Antigravity IDE)
+                ws.send(json.dumps({"id": 930, "method": "Input.dispatchKeyEvent", "params": {"type": "keyDown", "modifiers": 2, "windowsVirtualKeyCode": 68, "key": "d", "code": "KeyD"}}))
+                try:
+                    ws.recv(timeout=0.4)
+                except Exception:
+                    pass
+                ws.send(json.dumps({"id": 931, "method": "Input.dispatchKeyEvent", "params": {"type": "keyUp", "modifiers": 2, "windowsVirtualKeyCode": 68, "key": "d", "code": "KeyD"}}))
+                try:
+                    ws.recv(timeout=0.4)
+                except Exception:
+                    pass
+
+            print(f"[TARS Web] Procesamiento cancelado en Antigravity IDE (stopped_btn={stopped})")
+            return {"success": True, "stopped": stopped}
+    except Exception as e:
+        print(f"[TARS Web] Error cancelando en Antigravity via CDP: {e}")
+        return {"success": False, "error": str(e)}
+
+
 def send_to_antigravity_ide(text, target_chat_id=None, file_paths=None):
+    send_start_ts = time.time()
+    if send_start_ts - LAST_CANCEL_TIMESTAMP < 1.5:
+        print("[TARS Web] Inyección abortada antes de iniciar por cancelación reciente.")
+        return False
+
     ws_url = get_devtools_ws_url()
     if not ws_url:
         print("[TARS Web] DevTools WS no disponible para inyectar texto.")
         return False
 
     with _ide_send_lock:
+        if time.time() - LAST_CANCEL_TIMESTAMP < 2.0 or LAST_CANCEL_TIMESTAMP >= send_start_ts:
+            print("[TARS Web] Inyección abortada al tomar lock por cancelación del usuario.")
+            return False
         try:
             # 0. Si el usuario indico un chat especifico, asegurar que la ventana de Antigravity este en ese chat
             if target_chat_id:
@@ -531,12 +634,14 @@ def send_to_antigravity_ide(text, target_chat_id=None, file_paths=None):
                     except Exception as e_file:
                         print(f"[TARS Web] Error adjuntando archivos via CDP: {e_file}")
 
-                # 1. Si Antigravity esta generando una respuesta (boton Stop visible), esperar a que termine (hasta 60s)
+                # 1. Si Antigravity esta generando una respuesta (boton Stop/Cancel visible), esperar a que termine (hasta 60s)
                 busy_expr = """(() => {
-                    const stop = document.querySelector('button[aria-label*="Stop"], button[aria-label*="stop"], button[aria-label*="Detener"], button[aria-label*="detener"]');
+                    const stop = document.querySelector('[data-tooltip-id="input-send-button-cancel-tooltip"], button[aria-label*="Cancel"], button[aria-label*="Stop"], button[aria-label*="stop"], button[aria-label*="Detener"]');
                     return Boolean(stop);
                 })()"""
                 for _ in range(240):  # 240 * 0.25s = 60s
+                    if LAST_CANCEL_TIMESTAMP >= send_start_ts:
+                        return False
                     ws.send(json.dumps({
                         "id": 99,
                         "method": "Runtime.evaluate",
@@ -562,6 +667,8 @@ def send_to_antigravity_ide(text, target_chat_id=None, file_paths=None):
                 })()"""
                 focused = False
                 for _ in range(40):
+                    if LAST_CANCEL_TIMESTAMP >= send_start_ts:
+                        return False
                     ws.send(json.dumps({
                         "id": 101,
                         "method": "Runtime.evaluate",
@@ -592,6 +699,9 @@ def send_to_antigravity_ide(text, target_chat_id=None, file_paths=None):
                 ws.recv(timeout=1)
                 ws.send(json.dumps({"id": 105, "method": "Input.dispatchKeyEvent", "params": {"type": "keyUp", "windowsVirtualKeyCode": 8, "key": "Backspace", "code": "Backspace"}}))
                 ws.recv(timeout=1)
+
+                if LAST_CANCEL_TIMESTAMP >= send_start_ts:
+                    return False
 
                 # 4. Insertar el texto a traves de CDP Input domain (nativo en el render de Chrome)
                 ws.send(json.dumps({
@@ -632,6 +742,8 @@ def send_to_antigravity_ide(text, target_chat_id=None, file_paths=None):
                 })()"""
                 clicked = False
                 for _ in range(40):
+                    if LAST_CANCEL_TIMESTAMP >= send_start_ts:
+                        return False
                     time.sleep(0.1)
                     ws.send(json.dumps({
                         "id": 107,
@@ -647,7 +759,7 @@ def send_to_antigravity_ide(text, target_chat_id=None, file_paths=None):
                         pass
 
                 # Fallback por Enter si el boton no respondio pero el texto estaba en el input
-                if not clicked:
+                if not clicked and LAST_CANCEL_TIMESTAMP < send_start_ts:
                     ws.send(json.dumps({"id": 108, "method": "Input.dispatchKeyEvent", "params": {"type": "rawKeyDown", "windowsVirtualKeyCode": 13, "key": "Enter", "code": "Enter", "text": "\\r", "unmodifiedText": "\\r"}}))
                     ws.recv(timeout=1)
                     ws.send(json.dumps({"id": 109, "method": "Input.dispatchKeyEvent", "params": {"type": "keyUp", "windowsVirtualKeyCode": 13, "key": "Enter", "code": "Enter"}}))
@@ -890,6 +1002,7 @@ async def handle_chat(request):
         return web.json_response({"reply": f"Error interno: {e}"}, status=500)
 
 async def handle_audio(request):
+    req_start = time.time()
     try:
         reader = await request.multipart()
         client_chat_id = None
@@ -928,6 +1041,13 @@ async def handle_audio(request):
         if not os.path.exists(raw_path):
             return web.json_response({"reply": "No se envio ningun archivo de audio."}, status=400)
 
+        if LAST_CANCEL_TIMESTAMP >= req_start:
+            try:
+                os.remove(raw_path)
+            except Exception:
+                pass
+            return web.json_response({"cancelled": True, "reply": "Envío cancelado."})
+
         # Convertir a WAV 16kHz mono con ffmpeg
         await asyncio.to_thread(
             subprocess.run,
@@ -941,6 +1061,13 @@ async def handle_audio(request):
             os.remove(wav_path)
         except Exception:
             pass
+
+        if LAST_CANCEL_TIMESTAMP >= req_start:
+            return web.json_response({
+                "cancelled": True,
+                "user_text": user_text or "[Cancelado]",
+                "reply": "🛑 Procesamiento cancelado antes de enviar."
+            })
 
         if not user_text:
             user_text = "[Audio no reconocido con claridad]"
@@ -1034,6 +1161,10 @@ def get_latest_transcript_message():
                 for line in lines:
                     try:
                         d = json.loads(line)
+                        status_val = str(d.get("status", "")).upper()
+                        if status_val in ("CANCELED", "CANCELLED", "ERROR"):
+                            proc_info["is_processing"] = False
+                            continue
                         if d.get("type") == "PLANNER_RESPONSE" and d.get("source") == "MODEL":
                             idx = d.get("step_index", 0)
                             if d.get("content"):
@@ -1073,6 +1204,12 @@ def get_latest_transcript_message():
                                     proc_info["tool_detail"] = ""
                     except Exception:
                         pass
+            if proc_info["is_processing"]:
+                try:
+                    if LAST_CANCEL_TIMESTAMP >= os.path.getmtime(transcript_path):
+                        proc_info["is_processing"] = False
+                except Exception:
+                    pass
         except Exception as e:
             print(f"[TARS Web] Error leyendo transcript: {e}")
     return latest_idx, latest_msg, proc_info
@@ -1465,6 +1602,12 @@ async def handle_tunnel_url(request):
         pass
     return web.json_response({"tunnel_url": tunnel_url})
 
+async def handle_cancel(request):
+    global LAST_CANCEL_TIMESTAMP
+    LAST_CANCEL_TIMESTAMP = time.time()
+    res = await asyncio.to_thread(cancel_antigravity_ide)
+    return web.json_response(res)
+
 def init_app():
     app = web.Application()
     app.router.add_get("/", handle_index)
@@ -1479,6 +1622,7 @@ def init_app():
     app.router.add_post("/api/switch_model", handle_switch_model)
     app.router.add_post("/api/toggle_pc_sound", handle_toggle_pc_sound)
     app.router.add_post("/api/test_notify", handle_test_notify)
+    app.router.add_post("/api/cancel", handle_cancel)
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/api/audio", handle_audio)
     app.router.add_get("/api/sync", handle_sync)

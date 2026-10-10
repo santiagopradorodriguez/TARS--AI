@@ -120,13 +120,16 @@ Para que el celular vibre y te muestre alertas tipo WhatsApp cuando Antigravity 
 
 ---
 
-### 3. Enviar Mensajes por Texto o por Voz (`🎙️`)
+### 3. Enviar Mensajes por Texto, por Voz (`🎙️`) y Cortar Procesamiento (`🛑 Cortar`)
 - **Por Texto**: Escribí tu mensaje o instrucción en la caja inferior y presioná el botón de enviar (`➤`) o `Enter`. Tu prompt se inyectará automáticamente en la ventana activa de Antigravity IDE aunque la laptop tenga la pantalla bloqueada o en otra ventana.
 - **Por Voz**:
   1. Tocá el botón central del micrófono **`🎙️`** en la barra inferior.
-  2. Hablá normalmente en español; al terminar de hablar el audio se procesa y se envía directo al chat.
+  2. Hablá normalmente en español; al terminar de hablar tocá el micrófono de nuevo para enviarlo.
+- **Cortar Grabación o Procesamiento (`🛑 Cortar` / `Cortar IA`)**:
+  - **Mientras estás grabando un audio**: Tocá el botón rojo **`Cancelar`** al lado del micrófono para descartar el audio sin enviarlo si te equivocaste o hubo ruido.
+  - **Si el mensaje salió mal o querés frenar a la IA**: Tocá **`🛑 Cortar`** (al lado del micrófono, debajo de tu mensaje enviado o dentro de la tarjeta azul *"Antigravity pensando..."*). Esto aborta el envío en curso y presiona automáticamente *Cancel (`Ctrl+D`)* en Antigravity IDE para detener el procesamiento al instante.
 - **Control de Voz y Audio**:
-  - **`⏹️ Callar`**: Detiene inmediatamente la lectura por voz en el celular si la respuesta es larga.
+  - **`⏹️ Detener voz`**: Detiene inmediatamente la lectura por voz de Elena en el celular.
   - **`🔊 PC` / `🔇 PC`**: Activa o silencia los parlantes de la laptop de forma remota (ideal cuando estás fuera de casa y no querés que la PC hable sola).
 
 ---

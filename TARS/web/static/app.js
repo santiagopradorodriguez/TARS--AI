@@ -24,8 +24,14 @@ function updateProcessingBubble(info) {
 
     bubble.innerHTML = `
         <div class="processing-card-header">
-            <span class="processing-pulse"></span>
-            <span class="processing-title">Antigravity pensando y ejecutando...</span>
+            <div class="processing-header-left">
+                <span class="processing-pulse"></span>
+                <span class="processing-title">Antigravity pensando...</span>
+            </div>
+            <button class="proc-stop-inline-btn" onclick="window.cancelCurrentProcessing()" title="Cortar procesamiento de inmediato">
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
+                Cortar
+            </button>
         </div>
         <div class="processing-thought-box">
             💭 ${thoughtText}
@@ -308,7 +314,15 @@ if (audioStopBtn) {
     });
 }
 
+function clearUserCancelChips() {
+    document.querySelectorAll('.user-cancel-chip').forEach(btn => btn.remove());
+}
+
 function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = true) {
+    if (sender === 'assistant') {
+        clearUserCancelChips();
+    }
+
     const msgDiv = document.createElement('div');
     msgDiv.className = `message ${sender}`;
 
@@ -321,9 +335,22 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
             navigator.vibrate([40, 60, 40]);
         }
     } else {
+        clearUserCancelChips();
         const p = document.createElement('p');
         p.innerText = text;
         contentDiv.appendChild(p);
+
+        const cancelChip = document.createElement('button');
+        cancelChip.className = 'user-cancel-chip';
+        cancelChip.innerHTML = `
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
+            <span>Cortar envío / IA</span>
+        `;
+        cancelChip.onclick = (e) => {
+            e.stopPropagation();
+            window.cancelCurrentProcessing();
+        };
+        contentDiv.appendChild(cancelChip);
     }
 
     if (media && media.length > 0) {
@@ -447,6 +474,67 @@ if (attachBtn && fileInput) {
     });
 }
 
+// ===== CONTROL DE CANCELACION DE GRABACION Y PROCESAMIENTO DE IA =====
+const cancelProcBtn = document.getElementById('cancel-proc-btn');
+const cancelProcLabel = document.getElementById('cancel-proc-label');
+let recordingCancelled = false;
+let activeFetchController = null;
+
+window.cancelCurrentProcessing = async function() {
+    if (navigator.vibrate) navigator.vibrate([80, 40, 80]);
+
+    // 1. Si estaba grabando audio por micrófono: descartar sin enviar
+    if (isRecording && mediaRecorder) {
+        recordingCancelled = true;
+        isRecording = false;
+        micBtn.classList.remove('recording');
+        if (cancelProcLabel) cancelProcLabel.innerText = 'Cortar';
+        if (cancelProcBtn) cancelProcBtn.classList.remove('active-danger');
+        micStatusLabel.innerText = '🛑 Audio cancelado (no enviado)';
+        try {
+            mediaRecorder.stop();
+        } catch (e) {}
+        showWhatsAppToast('🛑 Grabación descartada', 'El mensaje de voz fue cancelado y no se envió.');
+        return;
+    }
+
+    // 2. Si había un envío o transcripción en curso: abortarlo en cliente y servidor
+    if (activeFetchController) {
+        try {
+            activeFetchController.abort();
+        } catch (e) {}
+        activeFetchController = null;
+    }
+
+    // 3. Detener voz actual y limpiar burbuja de pensamiento
+    stopCurrentAudio();
+    removeProcessingBubble();
+    clearUserCancelChips();
+    if (cancelProcBtn) cancelProcBtn.classList.remove('active-danger');
+    if (cancelProcLabel) cancelProcLabel.innerText = 'Cortar';
+    micStatusLabel.innerText = '🛑 Cortando procesamiento en PC...';
+
+    try {
+        await fetch('/api/cancel', { method: 'POST' });
+        micStatusLabel.innerText = '🛑 Procesamiento detenido';
+        showWhatsAppToast('🛑 Procesamiento cortado', 'Se detuvo la ejecución en Antigravity IDE.');
+        setTimeout(() => {
+            if (!isRecording && micStatusLabel.innerText.includes('detenido')) {
+                micStatusLabel.innerText = 'Toca para hablar';
+            }
+        }, 2500);
+    } catch (e) {
+        micStatusLabel.innerText = 'Toca para hablar';
+    }
+};
+
+if (cancelProcBtn) {
+    cancelProcBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        window.cancelCurrentProcessing();
+    });
+}
+
 async function sendTextMessage(text) {
     const trimmed = text.trim();
     if (!trimmed && pendingAttachments.length === 0) return;
@@ -467,6 +555,10 @@ async function sendTextMessage(text) {
     appendMessage('user', userTextDisplay, userMedia.length > 0 ? userMedia : null);
     textInput.value = '';
 
+    if (cancelProcBtn) cancelProcBtn.classList.add('active-danger');
+    if (cancelProcLabel) cancelProcLabel.innerText = 'Cortar IA';
+
+    activeFetchController = new AbortController();
     try {
         let resp;
         if (filesToSend.length > 0) {
@@ -476,7 +568,8 @@ async function sendTextMessage(text) {
             filesToSend.forEach(f => formData.append('files', f));
             resp = await fetch('/api/chat', {
                 method: 'POST',
-                body: formData
+                body: formData,
+                signal: activeFetchController.signal
             });
         } else {
             resp = await fetch('/api/chat', {
@@ -485,16 +578,21 @@ async function sendTextMessage(text) {
                 body: JSON.stringify({ 
                     text: trimmed,
                     chat_id: activeChatId || ''
-                })
+                }),
+                signal: activeFetchController.signal
             });
         }
+        activeFetchController = null;
         const data = await resp.json();
         if (data.sent_to_ide) {
             micStatusLabel.innerText = 'Antigravity procesando en PC...';
         } else if (data.reply) {
             appendMessage('assistant', data.reply, data.media, data.audio_url);
+            if (cancelProcBtn) cancelProcBtn.classList.remove('active-danger');
         }
     } catch (err) {
+        activeFetchController = null;
+        if (err && err.name === 'AbortError') return;
         appendMessage('assistant', 'Error de conexión al enviar el mensaje.');
     }
 }
@@ -520,20 +618,32 @@ async function sendAudioBlob(blob) {
     }
     filesToSend.forEach(f => formData.append('files', f));
 
+    if (cancelProcBtn) cancelProcBtn.classList.add('active-danger');
+    if (cancelProcLabel) cancelProcLabel.innerText = 'Cortar IA';
+
+    activeFetchController = new AbortController();
     try {
-        micStatusLabel.innerText = 'Transcribiendo...';
+        micStatusLabel.innerText = 'Transcribiendo... (toca Cortar para anular)';
         const resp = await fetch('/api/audio', {
             method: 'POST',
-            body: formData
+            body: formData,
+            signal: activeFetchController.signal
         });
+        activeFetchController = null;
         const data = await resp.json();
-        
+
         if (data.user_text) {
             // Reemplazar mensaje de usuario con el texto transcripto
             const msgs = document.querySelectorAll('.message.user');
             if (msgs.length > 0) {
-                msgs[msgs.length - 1].querySelector('p').innerText = data.user_text;
+                const pEl = msgs[msgs.length - 1].querySelector('p');
+                if (pEl) pEl.innerText = data.user_text;
             }
+        }
+
+        if (data.cancelled) {
+            micStatusLabel.innerText = '🛑 Envío cancelado';
+            return;
         }
 
         if (data.sent_to_ide) {
@@ -542,8 +652,11 @@ async function sendAudioBlob(blob) {
         } else if (data.reply) {
             appendMessage('assistant', data.reply, data.media, data.audio_url);
             micStatusLabel.innerText = 'Toca para hablar';
+            if (cancelProcBtn) cancelProcBtn.classList.remove('active-danger');
         }
     } catch (err) {
+        activeFetchController = null;
+        if (err && err.name === 'AbortError') return;
         appendMessage('assistant', 'Error al procesar el audio en la PC.');
         micStatusLabel.innerText = 'Toca para hablar';
     }
@@ -556,6 +669,7 @@ async function startRecording() {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaRecorder = new MediaRecorder(stream);
         audioChunks = [];
+        recordingCancelled = false;
 
         mediaRecorder.ondataavailable = (event) => {
             if (event.data.size > 0) {
@@ -564,8 +678,13 @@ async function startRecording() {
         };
 
         mediaRecorder.onstop = () => {
-            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
             stream.getTracks().forEach(track => track.stop());
+            if (recordingCancelled) {
+                audioChunks = [];
+                recordingCancelled = false;
+                return;
+            }
+            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
             if (audioChunks.length > 0) {
                 sendAudioBlob(audioBlob);
             }
@@ -575,7 +694,9 @@ async function startRecording() {
         isRecording = true;
         recordStartTime = Date.now();
         micBtn.classList.add('recording');
-        micStatusLabel.innerText = 'Escuchando... Toca para enviar';
+        if (cancelProcBtn) cancelProcBtn.classList.add('active-danger');
+        if (cancelProcLabel) cancelProcLabel.innerText = 'Cancelar';
+        micStatusLabel.innerText = 'Escuchando... Toca mic para enviar o Cancelar';
     } catch (err) {
         alert('No se pudo acceder al microfono. Asegurate de dar permisos HTTPS en el navegador.');
     }
@@ -1150,10 +1271,16 @@ async function syncWithAntigravity() {
         if (data.processing_info && data.processing_info.is_processing) {
             updateProcessingBubble(data.processing_info);
             micStatusLabel.innerText = "⏳ " + (data.processing_info.tool_action || "Pensando...");
+            if (cancelProcBtn) cancelProcBtn.classList.add('active-danger');
+            if (cancelProcLabel && !isRecording) cancelProcLabel.innerText = 'Cortar IA';
             acquireWakeLock(true);
         } else {
             removeProcessingBubble();
             acquireWakeLock(false);
+            if (!isRecording && !activeFetchController) {
+                if (cancelProcBtn) cancelProcBtn.classList.remove('active-danger');
+                if (cancelProcLabel) cancelProcLabel.innerText = 'Cortar';
+            }
             if (!isRecording && micStatusLabel.innerText.startsWith("⏳ ")) {
                 micStatusLabel.innerText = 'Toca para hablar';
             }
@@ -1169,6 +1296,9 @@ async function syncWithAntigravity() {
             }
         } else if (data.has_new && data.step_index > currentSyncIndex && !renderedStepIndices.has(data.step_index)) {
             removeProcessingBubble();
+            clearUserCancelChips();
+            if (cancelProcBtn && !isRecording) cancelProcBtn.classList.remove('active-danger');
+            if (cancelProcLabel && !isRecording) cancelProcLabel.innerText = 'Cortar';
             const isFirstLoad = (currentSyncIndex === 0);
             currentSyncIndex = data.step_index;
             renderedStepIndices.add(data.step_index);
