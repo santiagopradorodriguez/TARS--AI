@@ -1195,7 +1195,8 @@ def get_latest_transcript_message():
                             continue
                         if d.get("type") == "PLANNER_RESPONSE" and d.get("source") == "MODEL":
                             idx = d.get("step_index", 0)
-                            if d.get("content"):
+                            tool_calls = d.get("tool_calls", [])
+                            if d.get("content") and not tool_calls:
                                 latest_msg = d.get("content")
                                 latest_idx = idx
                                 proc_info["is_processing"] = False
@@ -1205,7 +1206,6 @@ def get_latest_transcript_message():
                                 proc_info["steps_count"] = proc_info.get("steps_count", 0) + 1
 
                                 # Extraer llamadas a herramientas y formatear en español claro
-                                tool_calls = d.get("tool_calls", [])
                                 if tool_calls:
                                     last_tool = tool_calls[-1]
                                     t_name = last_tool.get("name", "")
@@ -1254,7 +1254,7 @@ async def handle_sync(request):
 
     latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message)
 
-    if chat_changed or (latest_idx > last_idx and latest_msg):
+    if chat_changed or (not proc_info.get("is_processing") and latest_idx > last_idx and latest_msg):
         # Extraer imagenes si las hay
         img_matches = re.findall(r'(/[\w\-./]+\.(?:png|jpg|jpeg|gif))', latest_msg)
         for img_path in img_matches:
@@ -1836,16 +1836,12 @@ async def watch_transcript_for_push():
     except Exception:
         pass
 
-    last_progress_push_ts = 0.0
-    last_progress_step_idx = 0
-
     while True:
         await asyncio.sleep(1.5)
         try:
             latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message)
-            if latest_idx > LAST_NOTIFIED_STEP["idx"] and latest_msg:
+            if not proc_info.get("is_processing") and latest_idx > LAST_NOTIFIED_STEP["idx"] and latest_msg:
                 LAST_NOTIFIED_STEP["idx"] = latest_idx
-                last_progress_step_idx = 0
                 await asyncio.to_thread(
                     send_web_push_all,
                     "🤖 TARS • Antigravity",
@@ -1853,22 +1849,6 @@ async def watch_transcript_for_push():
                     "/",
                     f"tars-step-{latest_idx}"
                 )
-            elif proc_info and proc_info.get("is_processing"):
-                p_idx = proc_info.get("step_index", 0)
-                steps_cnt = proc_info.get("steps_count", 1)
-                now = time.time()
-                # Actualizar de vez en cuando (cada 15s) qué está laburando Antigravity
-                if steps_cnt >= 2 and p_idx != last_progress_step_idx and (now - last_progress_push_ts) >= 15.0:
-                    last_progress_push_ts = now
-                    last_progress_step_idx = p_idx
-                    action_desc = proc_info.get("tool_action") or "Procesando tarea..."
-                    await asyncio.to_thread(
-                        send_web_push_all,
-                        f"🛠️ TARS laburando (Paso {steps_cnt})",
-                        action_desc,
-                        "/",
-                        f"tars-progress-{p_idx}"
-                    )
         except Exception as e:
             print(f"[TARS Web] Error en watch_transcript_for_push: {e}")
 

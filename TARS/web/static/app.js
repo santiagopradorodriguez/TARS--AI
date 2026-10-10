@@ -1362,21 +1362,10 @@ async function syncWithAntigravity() {
             updateProcessingBubble(data.processing_info);
             const actDesc = data.processing_info.tool_action || "Pensando...";
             const stepsCnt = data.processing_info.steps_count || 1;
-            const pIdx = data.processing_info.step_index || 0;
             micStatusLabel.innerText = `⏳ Paso ${stepsCnt}: ${actDesc}`;
             if (cancelProcBtn) cancelProcBtn.classList.add('active-danger');
             if (cancelProcLabel && !isRecording) cancelProcLabel.innerText = 'Cortar IA';
             acquireWakeLock(true);
-
-            // Actualizar de vez en cuando (cada 12s) qué está laburando Antigravity
-            const nowMs = Date.now();
-            if (stepsCnt >= 2 && pIdx !== lastProgressToastStep && (nowMs - lastProgressToastTs) >= 12000) {
-                lastProgressToastTs = nowMs;
-                lastProgressToastStep = pIdx;
-                if (navigator.vibrate) navigator.vibrate(50);
-                showWhatsAppToast(`🛠️ Laburando (Paso ${stepsCnt})`, actDesc);
-                updateMediaSessionNotification(`Paso ${stepsCnt}: ${actDesc}`);
-            }
         } else {
             removeProcessingBubble();
             acquireWakeLock(false);
