@@ -1885,9 +1885,16 @@ async def handle_toggle_pc_sound(request):
 async def handle_get_chats(request):
     if is_remote_pc_active():
         rem_ip = get_active_pc_ip()
-        rem_chats = await asyncio.to_thread(remote_api_request, rem_ip, "/api/chats", "GET")
+        pc_info = get_active_pc_info()
+        rem_chats = await asyncio.to_thread(remote_api_request, rem_ip, "/api/chats", "GET", None, 8.0)
         if isinstance(rem_chats, dict) and "chats" in rem_chats:
             return web.json_response(rem_chats)
+        return web.json_response({
+            "current_id": "",
+            "chats": [],
+            "remote_offline": True,
+            "error": f"El servidor TARS en {pc_info.get('name', rem_ip)} ({rem_ip}:8443) no responde. Actualizalo o reinicialo en esa PC."
+        })
     chats_data = await asyncio.to_thread(get_antigravity_chats)
     return web.json_response(chats_data)
 

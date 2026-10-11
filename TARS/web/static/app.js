@@ -910,7 +910,8 @@ async function loadChatsList() {
         activeChatId = data.current_id || '';
 
         if (chats.length === 0) {
-            chatsList.innerHTML = '<div class="empty-chats">No se detectaron chats abiertos</div>';
+            const msg = data.error || 'No se detectaron chats abiertos';
+            chatsList.innerHTML = `<div class="empty-chats">${msg}</div>`;
             return;
         }
 
