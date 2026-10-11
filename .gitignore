@@ -17,3 +17,8 @@ tars_state.json
 # Archivos de media generados
 TARS/web/media/*.mp3
 TARS/web/media/*.png
+
+# Media generada por TARS en tiempo real
+TARS/web/media/*.txt
+# Estado interno de TARS (contiene info de la sesión)
+TARS/tars_state.json
