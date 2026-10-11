@@ -359,11 +359,30 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
         contentDiv.appendChild(cancelChip);
     }
 
-    if (media && media.length > 0) {
+    const mediaList = Array.isArray(media) ? [...media] : [];
+    if (sender === 'assistant' && text) {
+        const existingNames = new Set(mediaList.map(m => m && m.name).filter(Boolean));
+        const fileLinkRe = /file:\/\/(\/[^\)\s#"<>`]+)/g;
+        let m;
+        while ((m = fileLinkRe.exec(text)) !== null) {
+            const rawP = decodeURIComponent(m[1]).split('#')[0].trim();
+            const fname = rawP.split('/').pop();
+            if (fname && !existingNames.has(fname)) {
+                existingNames.add(fname);
+                mediaList.push({
+                    type: 'file',
+                    url: `/api/download?path=${encodeURIComponent(rawP)}`,
+                    name: fname
+                });
+            }
+        }
+    }
+
+    if (mediaList.length > 0) {
         const mediaContainer = document.createElement('div');
         mediaContainer.className = 'media-container';
 
-        media.forEach(item => {
+        mediaList.forEach(item => {
             if (item.type === 'image') {
                 const img = document.createElement('img');
                 img.src = item.url;
@@ -371,22 +390,40 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
                 img.onclick = () => window.open(item.url, '_blank');
                 mediaContainer.appendChild(img);
             } else if (item.type === 'file') {
+                const fname = item.name || 'archivo';
+                const isAudioFile = /\.(wav|mp3|ogg|m4a|flac)$/i.test(fname);
+                const wrapper = document.createElement('div');
+                wrapper.style.display = 'flex';
+                wrapper.style.flexDirection = 'column';
+                wrapper.style.gap = '6px';
+
+                if (isAudioFile) {
+                    const audioEl = document.createElement('audio');
+                    audioEl.controls = true;
+                    audioEl.preload = 'none';
+                    audioEl.src = item.url;
+                    audioEl.style.width = '100%';
+                    audioEl.style.height = '36px';
+                    wrapper.appendChild(audioEl);
+                }
+
                 const a = document.createElement('a');
                 a.href = item.url;
                 a.className = 'file-card';
-                a.download = item.name || 'archivo';
+                a.download = fname;
                 a.innerHTML = `
                     <div class="file-info">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
                             <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
                         </svg>
-                        <span class="file-name">${item.name || 'Archivo adjunto'}</span>
+                        <span class="file-name">Descargar ${fname}</span>
                     </div>
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
                     </svg>
                 `;
-                mediaContainer.appendChild(a);
+                wrapper.appendChild(a);
+                mediaContainer.appendChild(wrapper);
             }
         });
         contentDiv.appendChild(mediaContainer);

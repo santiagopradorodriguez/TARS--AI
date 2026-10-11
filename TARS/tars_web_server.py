@@ -1326,6 +1326,23 @@ def enrich_remote_sync_data(rem_ip, rem_data):
     else:
         _REMOTE_PROC_TRACKER.pop(rem_ip, None)
 
+    # Si la respuesta remota tiene enlaces file:///..., agregarlos a media si no están ya
+    if rem_data.get("content") and not is_proc:
+        import urllib.parse
+        rem_media = list(rem_data.get("media") or [])
+        existing_names = {m.get("name") for m in rem_media if isinstance(m, dict)}
+        for m_link in re.findall(r'file://(/[^\)\s#"<>`]+)', rem_data["content"]):
+            clean_p = urllib.parse.unquote(m_link).split("#")[0].strip()
+            fname = os.path.basename(clean_p)
+            if fname and fname not in existing_names:
+                existing_names.add(fname)
+                rem_media.append({
+                    "type": "file",
+                    "url": f"/api/download?path={urllib.parse.quote(clean_p)}",
+                    "name": fname
+                })
+        rem_data["media"] = rem_media
+
     rem_data["mobile_voice_muted"] = get_mobile_voice_muted()
     rem_data["active_pc"] = get_active_pc_info()
     return rem_data
@@ -1390,15 +1407,21 @@ async def handle_download(request):
     # Si está activa la PC remota en Tailscale, proxear el archivo desde allá
     if is_remote_pc_active():
         rem_ip = get_active_pc_ip()
+        fname = os.path.basename(clean_path.rstrip("/")) or "archivo"
         rem_url = f"https://{rem_ip}:8443/api/download?path={urllib.parse.quote(clean_path)}"
+        fallback_media_url = f"https://{rem_ip}:8443/media/{urllib.parse.quote(fname)}"
         def _fetch_rem_file():
             ctx = ssl._create_unverified_context()
-            req = urllib.request.Request(rem_url, method="GET")
-            with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
-                return resp.read(), resp.headers.get("Content-Type", "application/octet-stream")
+            try:
+                req = urllib.request.Request(rem_url, method="GET")
+                with urllib.request.urlopen(req, context=ctx, timeout=25) as resp:
+                    return resp.read(), resp.headers.get("Content-Type", "application/octet-stream")
+            except Exception:
+                req2 = urllib.request.Request(fallback_media_url, method="GET")
+                with urllib.request.urlopen(req2, context=ctx, timeout=25) as resp2:
+                    return resp2.read(), resp2.headers.get("Content-Type", "application/octet-stream")
         try:
             body, ctype = await asyncio.to_thread(_fetch_rem_file)
-            fname = os.path.basename(clean_path.rstrip("/")) or "archivo"
             return web.Response(
                 body=body,
                 content_type=ctype,
@@ -1446,7 +1469,7 @@ async def handle_sync(request):
         import urllib.parse
         rem_ip = get_active_pc_ip()
         qs = f"/api/sync?last_index={last_idx}&chat_id={urllib.parse.quote(client_chat_id)}"
-        rem_data = await asyncio.to_thread(remote_api_request, rem_ip, qs, "GET", None, 4.5)
+        rem_data = await asyncio.to_thread(remote_api_request, rem_ip, qs, "GET", None, 20.0)
         if isinstance(rem_data, dict) and not rem_data.get("_proxy_error"):
             rem_data = enrich_remote_sync_data(rem_ip, rem_data)
             if rem_data.get("has_new"):
@@ -1456,6 +1479,15 @@ async def handle_sync(request):
                     if isinstance(m, dict) and m.get("url") and m.get("url", "").startswith("/media/"):
                         await asyncio.to_thread(ensure_remote_media_cached, rem_ip, m["url"])
             return web.json_response(rem_data)
+        return web.json_response({
+            "has_new": False,
+            "step_index": last_idx,
+            "chat_id": client_chat_id,
+            "chat_changed": False,
+            "pc_audio_muted": get_pc_sound_muted(),
+            "mobile_voice_muted": get_mobile_voice_muted(),
+            "active_pc": get_active_pc_info()
+        })
 
     active_id = await asyncio.to_thread(get_current_antigravity_convo_id) or ""
     current_model = await asyncio.to_thread(get_current_antigravity_model) or ""
@@ -1580,7 +1612,7 @@ def check_tcp_port(ip, port=8443, timeout=0.45):
     finally:
         s.close()
 
-def remote_api_request(remote_ip, path, method="GET", json_body=None, timeout=6.0):
+def remote_api_request(remote_ip, path, method="GET", json_body=None, timeout=20.0):
     ctx = ssl._create_unverified_context()
     url = f"https://{remote_ip}:8443{path}"
     data_bytes = None
@@ -1608,7 +1640,7 @@ def ensure_remote_media_cached(remote_ip, media_url):
     url = f"https://{remote_ip}:8443/media/{fname}"
     try:
         req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, context=ctx, timeout=5.0) as resp:
+        with urllib.request.urlopen(req, context=ctx, timeout=15.0) as resp:
             content = resp.read()
             if content:
                 with open(local_dest, "wb") as f:
