@@ -96,7 +96,7 @@ Podés acceder a TARS tanto dentro de tu casa como desde la calle (colectivo, da
 
 1. **Vía Tailscale VPN (Recomendado para cualquier lugar)**:
    - Activá la app de **Tailscale** en tu celular Android/iOS.
-   - Abrí Chrome y entrá a: `https://100.x.x.a:8443` (o `http://100.x.x.a:8080`).
+   - Abrí Chrome y entrá a: `https://<IP-TAILSCALE-PC1>:8443` (o `http://<IP-TAILSCALE-PC1>:8080`).
 2. **Vía Túnel HTTPS de Cloudflare (Para Web Push con certificado público)**:
    - Consultá la URL activa del túnel ejecutando en la PC:
      ```bash
@@ -167,7 +167,7 @@ Podés alternar qué cerebro usa Antigravity en cualquier momento sin tocar la P
 ---
 
 ### 7. Elegir qué PC con Antigravity Usar (Multi-PC en Tailscale)
-Si estás trabajando con dos o más computadoras con Antigravity (por ejemplo **Lenovo Yoga** `100.x.x.a` y **Pop!_OS** `100.x.x.b`):
+Si estás trabajando con dos o más computadoras con Antigravity (por ejemplo **Lenovo Yoga** `<IP-TAILSCALE-PC1>` y **Pop!_OS** `<IP-TAILSCALE-PC2>`):
 
 1. Tocá el botón **Lenovo Yoga** (o **Pop!_OS**) arriba a la izquierda en la barra superior de TARS.
 2. Se abrirá el panel **"Elegir PC con Antigravity"**, que detecta automáticamente todas tus PCs conectadas a tu red **Tailscale** y verifica en vivo si tienen TARS activo.

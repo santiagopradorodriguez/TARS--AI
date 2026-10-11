@@ -2,5 +2,18 @@ venv/
 .env
 __pycache__/
 *.pyc
+
+# Certificados SSL - NUNCA subir al repo
+TARS/certs/
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Claves VAPID y secretos
+vapid_keys.json
+tars_state.json
+
+# Archivos de media generados
 TARS/web/media/*.mp3
 TARS/web/media/*.png

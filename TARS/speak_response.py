@@ -197,7 +197,7 @@ def main():
                             "-H", "Title: TARS - Nuevo mensaje",
                             "-H", "Priority: high",
                             "-H", "Tags: robot,speech_balloon",
-                            "-H", "Click: https://100.x.x.a:8443",
+                            "-H", "Click: https://" + os.environ.get("TARS_LOCAL_IP", "localhost") + ":8443",
                             "-d", preview,
                             "https://ntfy.sh/tars_santiago_a03"
                         ],

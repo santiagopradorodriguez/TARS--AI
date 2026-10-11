@@ -1970,7 +1970,7 @@ def send_web_push_all(title, body, url="/", tag="tars-msg-latest"):
                         subscription_info=sub,
                         data=payload,
                         vapid_private_key=raw_priv,
-                        vapid_claims={"sub": "mailto:santiagopradorodriguez@gmail.com"},
+                        vapid_claims={"sub": "mailto:" + os.environ.get("TARS_VAPID_EMAIL", "user@example.com")},
                         ttl=3600
                     )
                     valid_subs.append(sub)
@@ -1996,7 +1996,7 @@ def send_web_push_all(title, body, url="/", tag="tars-msg-latest"):
                 "Title": ascii_title,
                 "Priority": "high",
                 "Tags": "robot,speech_balloon",
-                "Click": "https://100.x.x.a:8443"
+                "Click": "https://" + os.environ.get("TARS_LOCAL_IP", "localhost") + ":8443"
             },
             method="POST"
         )
