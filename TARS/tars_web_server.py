@@ -847,8 +847,12 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
         else:
             return f"No encontre un chat que coincida con '{cleaned}'.", media, sent_to_ide
 
-    # 1. Captura de pantalla
-    if "captura" in cmd_lower or "pantalla" in cmd_lower or "screenshot" in cmd_lower:
+    # 1. Captura de pantalla (solo si es una orden explícita)
+    screenshot_triggers = [
+        "sacar captura", "saca captura", "tomar captura", "toma captura",
+        "captura de pantalla", "screenshot", "hacer screenshot", "sacale captura"
+    ]
+    if any(st in cmd_clean for st in screenshot_triggers):
         img_name = f"screen_{int(time.time())}.png"
         img_path = os.path.join(MEDIA_DIR, img_name)
         try:
@@ -862,30 +866,30 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
             reply = f"Error tomando captura: {e}"
         return reply, media, sent_to_ide
 
-    # 2. Control de Spotify / Multimedia
-    if "spotify" in cmd_lower or "musica" in cmd_lower:
-        if "pausa" in cmd_lower or "parar" in cmd_lower or "pausar" in cmd_lower:
-            subprocess.run(["playerctl", "pause"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return "Reproduccion de Spotify pausada.", media, sent_to_ide
-        elif "play" in cmd_lower or "reanudar" in cmd_lower or "reproducir" in cmd_lower:
-            subprocess.run(["playerctl", "play"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return "Reproduciendo musica en Spotify.", media, sent_to_ide
-        elif "siguiente" in cmd_lower or "pasar" in cmd_lower or "proxima" in cmd_lower:
-            subprocess.run(["playerctl", "next"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return "Pasando a la siguiente cancion.", media, sent_to_ide
-        elif "anterior" in cmd_lower or "previa" in cmd_lower:
-            subprocess.run(["playerctl", "previous"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return "Volviendo a la cancion anterior.", media, sent_to_ide
-        else:
-            try:
-                title = subprocess.check_output(["playerctl", "metadata", "title"], text=True, timeout=2).strip()
-                artist = subprocess.check_output(["playerctl", "metadata", "artist"], text=True, timeout=2).strip()
-                return f"Sonando ahora: {title} de {artist}.", media, sent_to_ide
-            except Exception:
-                return "Spotify no parece estar reproduciendo contenido en este momento.", media, sent_to_ide
+    # 2. Control de Spotify / Multimedia (solo si son órdenes directas de reproducción)
+    is_music_cmd = False
+    if any(kw in cmd_clean for kw in ["pausa la musica", "pausar musica", "pausa musica", "pausar spotify", "pausa spotify", "parar musica", "parar spotify"]):
+        subprocess.run(["playerctl", "pause"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "Reproduccion de Spotify pausada.", media, sent_to_ide
+    elif any(kw in cmd_clean for kw in ["pone musica", "poner musica", "play musica", "reproducir musica", "reproduce musica", "reanudar musica", "play spotify", "pone spotify", "poner spotify"]):
+        subprocess.run(["playerctl", "play"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "Reproduciendo musica en Spotify.", media, sent_to_ide
+    elif any(kw in cmd_clean for kw in ["siguiente cancion", "proxima cancion", "pasar cancion", "cambiar cancion", "pasar de cancion", "tema siguiente", "proximo tema"]):
+        subprocess.run(["playerctl", "next"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "Pasando a la siguiente cancion.", media, sent_to_ide
+    elif any(kw in cmd_clean for kw in ["cancion anterior", "anterior cancion", "volver a la cancion", "tema anterior"]):
+        subprocess.run(["playerctl", "previous"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "Volviendo a la cancion anterior.", media, sent_to_ide
+    elif any(kw in cmd_clean for kw in ["que cancion suena", "que cancion es", "que cancion esta sonando", "que tema suena", "que tema esta sonando", "que suena"]):
+        try:
+            title = subprocess.check_output(["playerctl", "metadata", "title"], text=True, timeout=2).strip()
+            artist = subprocess.check_output(["playerctl", "metadata", "artist"], text=True, timeout=2).strip()
+            return f"Sonando ahora: {title} de {artist}.", media, sent_to_ide
+        except Exception:
+            return "Spotify no parece estar reproduciendo contenido en este momento.", media, sent_to_ide
 
-    # 3. Creacion de archivos / notas
-    if "crea un archivo" in cmd_lower or "crear archivo" in cmd_lower or "guardar nota" in cmd_lower:
+    # 3. Creacion de archivos / notas (solo ordenes explicitas)
+    if cmd_clean.startswith("crea un archivo de texto") or cmd_clean.startswith("crear archivo de texto") or cmd_clean.startswith("guardar nota rapida"):
         filename = f"nota_{int(time.time())}.txt"
         filepath = os.path.join(MEDIA_DIR, filename)
         content = f"Nota creada remotamente desde el celular:\n\n{command_text}\nFecha: {time.ctime()}\n"
@@ -898,25 +902,20 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
             reply = f"Error creando archivo: {e}"
         return reply, media
 
-    # 4. Abrir aplicaciones o paginas
-    if cmd_lower.startswith("abre ") or cmd_lower.startswith("abrir "):
-        target = cmd_lower.replace("abre ", "").replace("abrir ", "").strip()
-        if "firefox" in target or "navegador" in target:
-            subprocess.Popen(["xdg-open", "https://google.com"])
-            return "Abriendo el navegador Firefox en la PC.", media, sent_to_ide
-        elif "youtube" in target:
-            subprocess.Popen(["xdg-open", "https://youtube.com"])
-            return "Abriendo YouTube en la PC.", media, sent_to_ide
-        elif "terminal" in target:
-            subprocess.Popen(["gnome-terminal"])
-            return "Abriendo una terminal en la PC.", media, sent_to_ide
-        else:
-            subprocess.Popen(["xdg-open", target])
-            return f"Lanzando {target} en la PC.", media, sent_to_ide
+    # 4. Abrir aplicaciones o paginas explicitas
+    if cmd_clean in ["abrir firefox", "abre firefox", "abrir navegador", "abre el navegador"]:
+        subprocess.Popen(["xdg-open", "https://google.com"])
+        return "Abriendo el navegador Firefox en la PC.", media, sent_to_ide
+    elif cmd_clean in ["abrir youtube", "abre youtube"]:
+        subprocess.Popen(["xdg-open", "https://youtube.com"])
+        return "Abriendo YouTube en la PC.", media, sent_to_ide
+    elif cmd_clean in ["abrir terminal", "abre terminal", "abrir una terminal", "abre la terminal"]:
+        subprocess.Popen(["gnome-terminal"])
+        return "Abriendo una terminal en la PC.", media, sent_to_ide
 
-    # 5. Estado general de la maquina
-    if "estado" in cmd_lower or "como estas" in cmd_lower:
-        return "Todos los sistemas de TARS estan en linea. Puedo controlar Spotify, tomar capturas de pantalla, crear archivos y abrir programas.", media, sent_to_ide
+    # 5. Estado general de TARS (solo si la orden es exactamente esa)
+    if cmd_clean in ["como estas", "estado del sistema", "estado de tars", "reporte de estado"]:
+        return "Todos los sistemas de TARS estan en linea y conectados a Antigravity.", media, sent_to_ide
 
     # 6. Para todo lo demas: Inyectar directamente a esta ventana activa de Antigravity IDE
     if send_to_antigravity_ide(command_text, target_chat_id=target_chat_id, file_paths=file_paths):
