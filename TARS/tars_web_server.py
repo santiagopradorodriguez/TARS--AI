@@ -1830,57 +1830,75 @@ def get_antigravity_models():
 def switch_antigravity_model(model_name, effort=None):
     if not model_name:
         return {"success": False, "error": "Nombre de modelo vacio"}
+
+    print(f"[TARS Web] Cambiando modelo -> '{model_name}' effort={effort}")
+
+    target_json = json.dumps(model_name.strip())
+    effort_json = json.dumps((effort or "").strip())
+
+    # Paso 1: Cerrar menú si estuviera abierto
     eval_in_antigravity("""(() => {
-        const items = document.querySelectorAll('[role="menuitem"]');
-        if (!items.length) {
+        const menu = document.querySelector('[role="menu"]');
+        if (menu) {
             const btn = document.querySelector('button[aria-label^="Select model"]');
             if (btn) btn.click();
         }
     })()""")
-    time.sleep(0.3)
-    target_json = json.dumps(model_name.strip())
-    effort_json = json.dumps((effort or "").strip())
+    time.sleep(0.15)
+
+    # Paso 2: Abrir el menú
+    open_res = eval_in_antigravity("""(() => {
+        const btn = document.querySelector('button[aria-label^="Select model"]');
+        if (!btn) return 'NO_BTN';
+        btn.click();
+        return 'opened';
+    })()""")
+    print(f"[TARS Web] Menú abierto: {open_res}")
+    time.sleep(0.4)
+
     if effort:
-        # Open effort submenu with ArrowRight on the target model item
-        eval_in_antigravity(f"""(() => {{
+        # Paso 3a: ArrowRight en el item principal para abrir submenu de effort
+        focus_res = eval_in_antigravity(f"""(() => {{
             const target = {target_json}.toLowerCase();
             const items = Array.from(document.querySelectorAll('[role="menuitem"]'));
             const item = items.find(el => (el.innerText || '').toLowerCase().includes(target));
-            if (item) {{
-                item.focus();
-                item.dispatchEvent(new KeyboardEvent('keydown', {{key: 'ArrowRight', code: 'ArrowRight', bubbles: true}}));
-            }}
+            if (!item) return 'ITEM_NOT_FOUND: ' + target + ' in ' + items.length + ' items';
+            item.focus();
+            item.dispatchEvent(new KeyboardEvent('keydown', {{key: 'ArrowRight', code: 'ArrowRight', bubbles: true}}));
+            return 'arrow_sent: ' + (item.innerText || '').trim().slice(0, 30);
         }})()""")
-        time.sleep(0.28)
-        eval_in_antigravity(f"""(() => {{
+        print(f"[TARS Web] Arrow submenu: {focus_res}")
+        time.sleep(0.35)
+
+        # Paso 4a: Click en el subitem de effort
+        click_res = eval_in_antigravity(f"""(() => {{
             const eff = {effort_json}.toLowerCase();
             const items = Array.from(document.querySelectorAll('[role="menuitem"], [role="menuitemradio"]'));
             const sub = items.find(el => (el.innerText || '').trim().toLowerCase() === eff);
-            if (sub) {{
-                sub.click();
-            }} else {{
-                const target = {target_json}.toLowerCase();
-                const mainItem = items.find(el => (el.innerText || '').toLowerCase().includes(target));
-                if (mainItem) mainItem.click();
-            }}
+            if (sub) {{ sub.click(); return 'clicked_effort: ' + (sub.innerText || '').trim(); }}
+            const target = {target_json}.toLowerCase();
+            const mainItem = items.find(el => (el.innerText || '').toLowerCase().includes(target));
+            if (mainItem) {{ mainItem.click(); return 'clicked_main_fallback'; }}
+            return 'NOTHING_FOUND among ' + items.length + ' items';
         }})()""")
+        print(f"[TARS Web] Click effort: {click_res}")
     else:
-        eval_in_antigravity(f"""(() => {{
+        # Paso 3b: Click directo en el item de modelo
+        click_res = eval_in_antigravity(f"""(() => {{
             const target = {target_json}.toLowerCase();
             const items = Array.from(document.querySelectorAll('[role="menuitem"]'));
             const item = items.find(el => (el.innerText || '').toLowerCase().includes(target));
-            if (item) item.click();
+            if (!item) return 'ITEM_NOT_FOUND: ' + target + ' in ' + items.length + ' items';
+            item.click();
+            return 'clicked: ' + (item.innerText || '').trim().slice(0, 30);
         }})()""")
-    time.sleep(0.3)
-    # Ensure menu is closed if still open
-    eval_in_antigravity("""(() => {
-        const items = document.querySelectorAll('[role="menuitem"]');
-        if (items.length) {
-            const btn = document.querySelector('button[aria-label^="Select model"]');
-            if (btn) btn.click();
-        }
-    })()""")
+        print(f"[TARS Web] Click modelo: {click_res}")
+
+    time.sleep(0.35)
+
+    # Paso 5: Confirmar modelo actual
     new_model = get_current_antigravity_model()
+    print(f"[TARS Web] Modelo resultante: '{new_model}'")
     return {"success": True, "current_model": new_model or model_name}
 
 async def handle_get_models(request):
