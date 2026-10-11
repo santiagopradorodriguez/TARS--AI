@@ -11,7 +11,7 @@ Permite controlar conversaciones, inyectar prompts, adjuntar imágenes y archivo
 ```
                      ┌──────────────────────────────────────────────┐
                      │          Google Antigravity IDE              │
-                     │    (CDP Port 35089 / Brain Logs & State)     │
+                     │    (CDP Port / Brain Logs & State)           │
                      └──────────────────────┬───────────────────────┘
                                             │
                      ┌──────────────────────┴───────────────────────┐
@@ -31,188 +31,268 @@ Permite controlar conversaciones, inyectar prompts, adjuntar imágenes y archivo
 
 ---
 
-## Características Principales
+## Requisitos Previos
 
-### TARS Mobile (PWA Instalable)
-- **Subida de Imágenes, Fotos y Archivos**: Adjuntá fotos tomadas con la cámara del celular, capturas de pantalla, documentos PDF o archivos de código directamente al chat de Antigravity IDE mediante inyección nativa por CDP (`DOM.setFileInputFiles`).
-- **Selector de Modelos de IA en Vivo**: Alterná el modelo de lenguaje de Antigravity en tiempo real desde el celular:
-  - **Gemini 3.8 Flash** (con selector de esfuerzo de razonamiento: *Rápido / Medio / Máximo*)
-  - **Gemini 3.7 Flash** / **Gemini 3.6 Flash** / **Gemini 3.1 Pro**
-  - **Claude Sonnet 4.6 (Thinking)**
-  - **Claude Opus 4.6 (Thinking)**
-  - **GPT-OSS 120B (Medium)**
-- **Navegación y Conmutación de Chats**: Explorá las conversaciones abiertas en el IDE y cambiá de chat con un solo toque o mediante botones de anterior / siguiente.
-- **Notificaciones Push estilo WhatsApp**:
-  - Alertas nativas en la barra de Android con vibración háptica triple (`[300ms, 120ms, 300ms, 120ms, 400ms]`) y banner flotante superior.
-  - Funcionan en segundo plano **con la pantalla bloqueada o el navegador cerrado**, mediante Service Worker (`sw.js`) y VAPID / FCM.
-  - Deduplicación estricta por ID de paso para evitar notificaciones repetidas.
-- **Doble Motor de Voz & TTS**:
-  - Reconocimiento de voz por micrófono en español rioplatense (`es-AR`) con fallback offline instantáneo mediante **Vosk**.
-  - Respuestas habladas automáticas ultra-naturales con **Microsoft Edge-TTS** (`es-AR-ElenaNeural` en el celular y `es-AR-TomasNeural` en la PC).
-  - Control remoto para silenciar o activar los parlantes de la PC desde el celular.
-- **Inyección Bidireccional en Antigravity IDE**: Comunicación de ultra-baja latencia vía Chrome DevTools Protocol (CDP) con foco emulado en segundo plano, streaming de razonamiento (`thinking`) y visualización de herramientas en ejecución.
-- **Conectividad Segura en Cualquier Lugar**:
-  - Acceso remoto cifrado punto a punto vía **Tailscale Mesh VPN**.
-  - Soporte integrado para túneles HTTPS con Cloudflare.
+Antes de empezar, necesitas tener instalado en tu PC:
+
+- **Linux** (Ubuntu 20.04+, Linux Mint, Debian o similar)
+- **Python 3.10+** (`python3 --version`)
+- **Google Antigravity IDE** corriendo con Chrome DevTools Protocol habilitado
+- **Git** (`sudo apt install git`)
+- **Tailscale** (para acceso desde el celular fuera de casa): https://tailscale.com/download
 
 ---
 
-## Instalación y Configuración
+## Instalación Paso a Paso
 
-### 1. Clonar el Repositorio
+### Paso 1 — Clonar el repositorio
+
 ```bash
-git clone https://github.com/santiagopradorodriguez/Jarvis.git
-cd Jarvis
+git clone https://github.com/santiagopradorodriguez/TARS--AI.git
+cd TARS--AI
 ```
 
-### 2. Crear Entorno Virtual e Instalar Dependencias
+---
+
+### Paso 2 — Crear entorno virtual e instalar dependencias
+
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Dependencias principales:
-- `aiohttp`, `websockets` (servidor HTTP/HTTPS asíncrono y CDP bridge)
-- `edge-tts` (síntesis de voz neural de alta calidad)
-- `vosk`, `SpeechRecognition` (reconocimiento de voz offline y online)
-- `pywebpush`, `py-vapid` (notificaciones Web Push para Chrome en Android)
+Dependencias principales que se instalan:
+- `aiohttp`, `websockets` — servidor web asíncrono y bridge CDP
+- `edge-tts` — síntesis de voz neural (voz de Elena y Tomas)
+- `vosk`, `SpeechRecognition` — reconocimiento de voz offline
+- `pywebpush`, `py-vapid` — notificaciones push en Android
 
-### 3. Modelo Offline Vosk (Español)
-Descargar el modelo ligero en español dentro de `~/.gemini/models/`:
+---
+
+### Paso 3 — Configurar tus credenciales
+
+Copiá el archivo de ejemplo y completalo con tus datos:
+
+```bash
+cp .env.example ~/.env
+nano ~/.env
+```
+
+Abrís el archivo y completás estas 3 variables:
+
+```bash
+# 1. Tu API Key de Google Gemini
+#    Conseguila en: https://aistudio.google.com/app/apikey
+GEMINI_API_KEY=AIzaSy...tu_clave_aqui
+
+# 2. La IP de Tailscale de tu PC
+#    Corré: tailscale ip -4
+#    Te va a dar algo como 100.x.x.x
+TARS_LOCAL_IP=100.x.x.x
+
+# 3. Tu email (para las notificaciones push)
+TARS_VAPID_EMAIL=tu_email@gmail.com
+```
+
+> Si no tenés API Key de Gemini, la conseguís gratis en https://aistudio.google.com/app/apikey
+
+---
+
+### Paso 4 — Descargar el modelo de voz offline (Vosk)
+
+Para que TARS entienda tu voz sin internet:
+
 ```bash
 mkdir -p ~/.gemini/models
 cd ~/.gemini/models
 wget https://alphacephei.com/vosk/models/vosk-model-small-es-0.42.zip
 unzip vosk-model-small-es-0.42.zip
+cd -
 ```
 
 ---
 
-## Instrucciones de Uso
+### Paso 5 — Generar los certificados SSL
 
-### 1. Conectarse desde el Celular e Instalar la App (PWA)
-Podés acceder a TARS tanto dentro de tu casa como desde la calle (colectivo, datos móviles o cualquier otra red Wi-Fi):
+TARS corre por HTTPS (necesario para el micrófono y las notificaciones en el celular). Generá un certificado auto-firmado:
 
-1. **Vía Tailscale VPN (Recomendado para cualquier lugar)**:
-   - Activá la app de **Tailscale** en tu celular Android/iOS.
-   - Abrí Chrome y entrá a: `https://<IP-TAILSCALE-PC1>:8443` (o `http://<IP-TAILSCALE-PC1>:8080`).
-2. **Vía Túnel HTTPS de Cloudflare (Para Web Push con certificado público)**:
-   - Consultá la URL activa del túnel ejecutando en la PC:
-     ```bash
-     journalctl --user -u tars-tunnel.service -n 30 | grep trycloudflare
-     ```
-   - Abrí el enlace `https://xxxx.trycloudflare.com` en Chrome desde tu celular.
-3. **Instalar como Aplicación Nativa**:
-   - En Chrome, tocá el menú de tres puntos arriba a la derecha y elegí **"Instalar aplicación"** o **"Agregar a la pantalla principal"**.
-   - TARS quedará instalada en tu cajón de aplicaciones con su propio ícono y a pantalla completa.
+```bash
+mkdir -p TARS/certs
+openssl req -x509 -newkey rsa:4096 -keyout TARS/certs/key.pem -out TARS/certs/cert.pem \
+  -days 3650 -nodes -subj "/CN=localhost" \
+  -addext "subjectAltName=IP:$(tailscale ip -4),IP:127.0.0.1,DNS:localhost"
+```
+
+> Los certificados se generan localmente y nunca se suben a GitHub (están en `.gitignore`).
 
 ---
 
-### 2. Activar las Notificaciones Push y Vibración
-Para que el celular vibre y te muestre alertas tipo WhatsApp cuando Antigravity termina una tarea (incluso con la pantalla apagada o mientras usás otra app):
+### Paso 6 — Generar las claves VAPID (notificaciones push)
 
-1. En la barra superior de TARS, tocá el botón **Notificaciones OFF** para activarlas.
-2. Cuando el navegador te pida permiso de notificaciones, tocá **"Permitir"**.
-3. En Android, para asegurar que la notificación suene, vibre y despliegue el cartel emergente superior:
-   - Mantené presionada la primera notificación de TARS que recibas (o andá a *Ajustes → Aplicaciones → Chrome → Notificaciones*).
-   - Asegurate de que la categoría del sitio esté configurada en **"Alerta"** y con **"Mostrar como ventana emergente"** activado.
-
----
-
-### 3. Enviar Mensajes por Texto, por Voz y Cortar Procesamiento
-- **Por Texto**: Escribí tu mensaje o instrucción en la caja inferior y presioná el botón de enviar o `Enter`. Tu prompt se inyectará automáticamente en la ventana activa de Antigravity IDE aunque la laptop tenga la pantalla bloqueada o en otra ventana.
-- **Por Voz**:
-  1. Tocá el botón del micrófono en la barra inferior.
-  2. Hablá normalmente en español; al terminar de hablar tocá el micrófono de nuevo para enviarlo.
-- **Cortar Grabación o Procesamiento**:
-  - **Mientras estás grabando un audio**: Tocá el botón rojo **Cancelar** al lado del micrófono para descartar el audio sin enviarlo si te equivocaste o hubo ruido.
-  - **Si el mensaje salió mal o querés frenar a la IA**: Tocá **Cortar** (al lado del micrófono, debajo de tu mensaje enviado o dentro de la tarjeta azul *"Antigravity pensando..."*). Esto aborta el envío en curso y presiona automáticamente *Cancel (Ctrl+D)* en Antigravity IDE para detener el procesamiento al instante.
-- **Control de Voz y Modo Silencioso**:
-  - **Desde la App**: Tocá el botón **Voz** para pasarlo a **Mudo** (rojo). Si Elena estaba hablando se calla en el acto, y los próximos mensajes entrarán en silencio (solo texto y vibración) sin hablarte en voz alta cuando estés ocupado o en una reunión.
-  - **Desde la Notificación de Android**: Cada notificación que te llega arriba incluye el botón rápido **Silenciar voz** (o **Activar voz**) para callar o activar la voz sin siquiera abrir la aplicación.
-  - **PC**: Activa o silencia los parlantes de la laptop de forma remota.
-
----
-
-### 4. Subir Imágenes, Fotos de Cámara y Documentos
-Podés mandarle fotos, capturas de pantalla, archivos `.txt`, `.pdf`, `.py`, `.js`, `.json`, `.zip`, etc. directamente a Antigravity desde el celular:
-
-1. Tocá el botón del clip a la izquierda de la barra de mensaje.
-2. Elegí sacar una foto con la **Cámara**, seleccionar una imagen de la **Galería** o buscar cualquier documento en tus **Archivos** (podés seleccionar varios a la vez).
-3. Verás una barra de vista previa encima del cuadro de texto con las miniaturas y nombres de los archivos seleccionados (podés quitar cualquiera tocando la X).
-4. Escribí un mensaje opcional (por ejemplo: *"Qué dice esta imagen?"* o *"Revisá este archivo"*) o usá el micrófono, y tocá **Enviar**.
-   - Si no escribís ningún texto y tocás enviar, TARS le pedirá automáticamente a Antigravity que analice el archivo adjunto.
+```bash
+mkdir -p ~/.gemini/config
+cd ~/.gemini/config
+python3 -c "
+from py_vapid import Vapid01
+import json, base64
+v = Vapid01()
+v.generate_keys()
+priv = v.private_key.private_bytes(
+    __import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding','PrivateFormat','NoEncryption']).Encoding.PEM,
+    __import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding','PrivateFormat','NoEncryption']).PrivateFormat.TraditionalOpenSSL,
+    __import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding','PrivateFormat','NoEncryption']).NoEncryption()
+).decode()
+pub = base64.urlsafe_b64encode(
+    v.public_key.public_bytes(
+        __import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding','PublicFormat']).Encoding.X962,
+        __import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding','PublicFormat']).PublicFormat.UncompressedPoint
+    )
+).decode().rstrip('=')
+json.dump({'private_key': priv, 'public_key': pub}, open('vapid_keys.json','w'), indent=2)
+print('Claves VAPID generadas en vapid_keys.json')
+"
+cd -
+```
 
 ---
 
-### 5. Cambiar de Modelo de IA en Vivo
-Podés alternar qué cerebro usa Antigravity en cualquier momento sin tocar la PC:
+### Paso 7 — Copiar el servidor al directorio de configuración
 
-1. Tocá el botón **Modelo IA** en la barra superior de la app.
-2. Se abrirá el panel con todos los modelos disponibles e indicará cuál está seleccionado actualmente:
-   - **Gemini 3.8 Flash**: Incluye 3 botones rápidos para elegir el nivel de pensamiento (**Rapido**, **Medio**, **Maximo**).
-   - **Gemini 3.7 Flash** / **Gemini 3.6 Flash** / **Gemini 3.1 Pro**
-   - **Claude Sonnet 4.6 (Thinking)** / **Claude Opus 4.6 (Thinking)**
-   - **GPT-OSS 120B (Medium)**
-3. Tocá el modelo (o nivel de esfuerzo) que quieras usar; TARS lo cambiará en tiempo real dentro de Antigravity IDE y actualizará el indicador superior.
+```bash
+cp TARS/tars_web_server.py ~/.gemini/config/tars_web_server.py
+```
 
 ---
 
-### 6. Cambiar entre Conversaciones de Antigravity
-- **Lista de Chats**: Tocá el botón **Chat** arriba a la derecha para ver todas las conversaciones recientes de Antigravity IDE (con su título e indicador del chat actual). Tocá cualquiera para saltar a esa conversación y cargar su historial en el celular.
-- **Navegación Rápida**: Usá los botones **Anterior** y **Siguiente** dentro del panel para pasar rápidamente de un chat a otro.
-- **Por Comando de Voz o Texto**: También podés decir o escribir *"cambiá al chat de..."* o *"siguiente chat"*.
+### Paso 8 — Configurar el servicio systemd (arranque automático)
+
+Para que TARS arranque solo cuando prendés la PC:
+
+```bash
+mkdir -p ~/.config/systemd/user
+
+cat > ~/.config/systemd/user/tars-web.service << 'EOF'
+[Unit]
+Description=TARS Mobile Web Server & Antigravity Worker Bridge (HTTPS 8443)
+After=network.target graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.gemini/config
+ExecStart=%h/.gemini/antigravity/scratch/TARS--AI/venv/bin/python3 %h/.gemini/config/tars_web_server.py
+Restart=always
+RestartSec=5
+EnvironmentFile=%h/.env
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable tars-web.service
+systemctl --user start tars-web.service
+systemctl --user status tars-web.service
+```
+
+Si todo está bien vas a ver `active (running)`.
 
 ---
 
-### 7. Elegir qué PC con Antigravity Usar (Multi-PC en Tailscale)
-Si estás trabajando con dos o más computadoras con Antigravity (por ejemplo **Lenovo Yoga** `<IP-TAILSCALE-PC1>` y **Pop!_OS** `<IP-TAILSCALE-PC2>`):
+### Paso 9 — Instalar la app en el celular
 
-1. Tocá el botón **Lenovo Yoga** (o **Pop!_OS**) arriba a la izquierda en la barra superior de TARS.
-2. Se abrirá el panel **"Elegir PC con Antigravity"**, que detecta automáticamente todas tus PCs conectadas a tu red **Tailscale** y verifica en vivo si tienen TARS activo.
-3. **Tocá la PC que quieras usar**:
-   - Sin cambiar de aplicación ni aceptar certificados nuevos, TARS enruta automáticamente tus mensajes, audios, lista de chats y notificaciones hacia la PC elegida.
-   - Si querés abrir el servidor web de la otra PC en una pestaña directa, también tenés el botón **Directo** al lado de cada PC.
-4. **Para actualizar ambas PCs con las últimas mejoras desde GitHub**:
-   En cualquiera de tus PCs, entrá a la carpeta del repositorio y ejecutá:
-   ```bash
-   git pull && chmod +x actualizar_tars.sh && ./actualizar_tars.sh
-   ```
+1. Activá **Tailscale** en tu celular Android/iOS
+2. Abrí **Chrome** y entrá a: `https://<TU-IP-TAILSCALE>:8443`
+   - Reemplazá `<TU-IP-TAILSCALE>` por lo que te dio el comando `tailscale ip -4`
+   - Chrome va a mostrar una advertencia del certificado — tocá **"Configuración avanzada" → "Acceder de todas formas"** (solo la primera vez)
+3. Para instalar como app: tocá el menú de tres puntos arriba a la derecha → **"Instalar aplicación"** o **"Agregar a la pantalla principal"**
 
 ---
 
-### 8. Comandos Rápidos del Sistema y Uso en PC
-Además de conversar con Antigravity, TARS reconoce comandos directos para controlar tu Linux:
-- **Música / Multimedia**: *"Pone música"*, *"Pausa la música"*, *"Siguiente canción"*, *"Subí el volumen"*, *"Bajá el volumen"*.
-- **Capturas de Pantalla de la PC**: *"Sacá una captura de pantalla"* (toma una captura del escritorio de tu PC y te la muestra).
-- **Notas Rápidas**: *"Anotá comprar café"* o *"Leé mis notas"*.
-- **Modo Escucha en PC (Wake-Word)**: Cuando estás frente a la laptop, podés activar la escucha por micrófono desde el ícono de bandeja del sistema (`tars-tray`) o mediante el atajo de teclado configurado para hablarle directamente a TARS sin abrir el navegador.
+## Uso Diario
+
+### Enviar mensajes por texto o voz
+- **Texto**: escribí en la caja inferior y tocá Enviar o Enter
+- **Voz**: tocá el micrófono, hablá, volvé a tocar para enviar
+- **Cortar**: si la IA está procesando y querés frenarla, tocá el botón **Cortar**
+
+### Silenciar la voz
+- Tocá **Voz** en la barra superior para silenciar/activar la respuesta hablada
+- También podés silenciarla desde la misma notificación de Android sin abrir la app
+
+### Subir archivos o fotos
+- Tocá el clip (adjunto) a la izquierda de la barra de mensaje
+- Elegí Cámara, Galería o Archivos
+- Agregá un mensaje opcional y tocá Enviar
+
+### Cambiar el modelo de IA
+- Tocá **Modelo IA** en la barra superior
+- Elegí el modelo y el nivel de esfuerzo (Rapido / Medio / Maximo)
+
+### Cambiar entre conversaciones
+- Tocá **Chat** arriba a la derecha para ver y cambiar de conversación
+
+### Elegir qué PC usar (Multi-PC con Tailscale)
+- Tocá el nombre de la PC activa arriba a la izquierda
+- Se listan automáticamente todas las PCs de tu red Tailscale que tengan TARS activo
+- Tocá la que querés usar y TARS redirige todo automáticamente
+
+---
+
+## Actualizar TARS en tu PC
+
+Cuando haya cambios nuevos en el repositorio:
+
+```bash
+cd TARS--AI
+git pull && chmod +x actualizar_tars.sh && ./actualizar_tars.sh
+```
 
 ---
 
 ## Servicios en Segundo Plano (systemd)
 
-TARS se ejecuta como servicios de usuario de `systemd` para arranque automático y tolerancia a fallos:
-
 | Servicio | Descripción |
 |---|---|
 | `tars-web.service` | Servidor Web dual HTTP (8080) / HTTPS (8443) y puente CDP |
-| `tars-tunnel.service` | Túnel Cloudflare para Web Push HTTPS verificado en Android |
+| `tars-tunnel.service` | Tunel Cloudflare para Web Push HTTPS verificado en Android |
 | `tars-tray.service` | Icono en la bandeja del sistema de Linux |
-| `tars-wake-word.service` | Escucha pasiva de palabra de activación por micrófono |
+| `tars-wake-word.service` | Escucha pasiva de palabra de activacion por microfono |
 
-Comandos útiles de administración:
+Comandos utiles:
+
 ```bash
-# Ver estado de los servicios
-systemctl --user status tars-web.service tars-tunnel.service
+# Ver estado
+systemctl --user status tars-web.service
 
-# Reiniciar el servidor web de TARS
+# Reiniciar
 systemctl --user restart tars-web.service
 
-# Ver logs en tiempo real
+# Ver logs en vivo
 journalctl --user -u tars-web.service -f
 ```
+
+---
+
+## Solución de Problemas
+
+**No puedo conectarme desde el celular**
+- Verificá que Tailscale esté activo en ambos dispositivos
+- Corré `systemctl --user is-active tars-web.service` — debe decir `active`
+- Revisá los logs: `journalctl --user -u tars-web.service -n 50`
+
+**No llegan notificaciones**
+- Asegurate de haber activado el botón de notificaciones en la app (campana)
+- En Android: mantené presionada una notificación de TARS → configura como "Alerta"
+- El servicio `tars-tunnel.service` con Cloudflare es necesario para notificaciones con pantalla apagada
+
+**La voz no funciona**
+- Verificá que el modelo Vosk esté descargado en `~/.gemini/models/vosk-model-small-es-0.42`
+- Revisá que `edge-tts` esté instalado: `venv/bin/pip show edge-tts`
+
+**El cambio de modelo no funciona**
+- Asegurate de que Antigravity IDE esté abierto y visible (no minimizado)
+- Los logs del servidor muestran el detalle: `journalctl --user -u tars-web.service -f`
 
 ---
 
