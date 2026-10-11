@@ -17,6 +17,7 @@ cp "$REPO_DIR/TARS/web/static/style.css" "$CONFIG_DIR/web/static/style.css"
 
 if systemctl --user list-unit-files | grep -q "tars-web.service"; then
     echo "🚀 Reiniciando servicio tars-web.service..."
+    systemctl --user reset-failed tars-web.service 2>/dev/null || true
     systemctl --user restart tars-web.service
     systemctl --user is-active tars-web.service
 fi
