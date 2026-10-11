@@ -2468,8 +2468,11 @@ async def async_main():
             host=["0.0.0.0", "::"],
             port=port
         )
-        http_site = web.TCPSite(runner, "0.0.0.0", http_port)
-        await http_site.start()
+        try:
+            http_site = web.TCPSite(runner, "0.0.0.0", http_port)
+            await http_site.start()
+        except Exception as e:
+            print(f"[TARS Web] Puerto HTTP {http_port} ocupado ({e}), continuando en 8443.")
         print(f"[TARS Web] SSL + Auto-Redirect HTTP->HTTPS habilitado en puerto {port} (y HTTP en {http_port}):")
         print(f"           - https://{local_ip}:{port}")
         print(f"           - https://pop-os.local:{port}")
