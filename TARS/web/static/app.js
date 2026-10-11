@@ -123,7 +123,9 @@ function renderMarkdown(text) {
 
     // 9. Links markdown [texto](url)
     processed = processed.replace(/\[(.*?)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-    processed = processed.replace(/\[(.*?)\]\(file:\/\/\/[^\)]+\)/g, '$1');
+    processed = processed.replace(/\[(.*?)\]\(file:\/\/(\/[^\)\s#]+)(?:#[^\)\s]*)?\)/g, (m, label, fpath) => {
+        return `<a href="/api/download?path=${encodeURIComponent(fpath)}" download class="inline-file-link" title="Descargar archivo">${label} ⬇</a>`;
+    });
 
     // 10. Parrafos y saltos de linea
     processed = processed.replace(/\n{2,}/g, '</p><p>');

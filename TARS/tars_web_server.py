@@ -1205,7 +1205,8 @@ def get_latest_transcript_message():
         "tool_detail": "",
         "step_index": 0,
         "steps_count": 0,
-        "recent_steps": []
+        "recent_steps": [],
+        "generated_files": []
     }
     transcript_path = get_active_transcript_path()
     if transcript_path and os.path.exists(transcript_path):
@@ -1225,6 +1226,7 @@ def get_latest_transcript_message():
                         if d.get("type") == "USER_INPUT":
                             proc_info["steps_count"] = 0
                             proc_info["recent_steps"] = []
+                            proc_info["generated_files"] = []
                             continue
                         status_val = str(d.get("status", "")).upper()
                         if status_val in ("CANCELED", "CANCELLED", "ERROR"):
@@ -1233,6 +1235,14 @@ def get_latest_transcript_message():
                         if d.get("type") == "PLANNER_RESPONSE" and d.get("source") == "MODEL":
                             idx = d.get("step_index", 0)
                             tool_calls = d.get("tool_calls", [])
+                            if tool_calls:
+                                for tc in tool_calls:
+                                    tc_name = tc.get("name", "")
+                                    tc_args = tc.get("args", {}) or {}
+                                    if tc_name in ("write_to_file", "replace_file_content", "multi_replace_file_content"):
+                                        tf = str(tc_args.get("TargetFile") or tc_args.get("AbsolutePath") or "").strip()
+                                        if tf and tf not in proc_info["generated_files"]:
+                                            proc_info["generated_files"].append(tf)
                             if d.get("content") and not tool_calls:
                                 latest_msg = d.get("content")
                                 latest_idx = idx
@@ -1321,6 +1331,112 @@ def enrich_remote_sync_data(rem_ip, rem_data):
     return rem_data
 
 
+def collect_turn_media_and_files(latest_msg, proc_info):
+    import urllib.parse
+    media = []
+    seen_paths = set()
+    candidates = []
+
+    # 1. Archivos creados o modificados durante el turno por herramientas de Antigravity
+    for gf in (proc_info.get("generated_files") or []):
+        if gf:
+            candidates.append(gf)
+
+    # 2. Links file:///... dentro del mensaje Markdown
+    if latest_msg:
+        for m in re.findall(r'file://(/[^\)\s#"<>`]+)', latest_msg):
+            candidates.append(urllib.parse.unquote(m))
+        # 3. Rutas absolutas directas mencionadas en el mensaje
+        for m in re.findall(r'((?:/home|/tmp|/var|/opt)/[\w\-./]+\.[a-zA-Z0-9]{1,8})', latest_msg):
+            candidates.append(m)
+
+    img_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+    for raw_p in candidates:
+        clean_p = raw_p.split("#")[0].strip()
+        if not clean_p or clean_p in seen_paths:
+            continue
+        if not os.path.isfile(clean_p):
+            continue
+        seen_paths.add(clean_p)
+        fname = os.path.basename(clean_p)
+        ext = os.path.splitext(fname)[1].lower()
+        if ext in img_exts:
+            dest = os.path.join(MEDIA_DIR, fname)
+            if not os.path.exists(dest):
+                try:
+                    subprocess.run(["cp", clean_p, dest], timeout=3)
+                except Exception:
+                    pass
+            media.append({"type": "image", "url": f"/media/{fname}", "name": fname})
+        else:
+            dl_url = f"/api/download?path={urllib.parse.quote(clean_p)}"
+            media.append({"type": "file", "url": dl_url, "name": fname})
+
+    return media
+
+
+async def handle_download(request):
+    import urllib.parse
+    import zipfile
+    raw_path = request.query.get("path", "").strip()
+    if not raw_path:
+        return web.json_response({"error": "Ruta vacia"}, status=400)
+
+    clean_path = urllib.parse.unquote(raw_path)
+    if clean_path.startswith("file://"):
+        clean_path = clean_path.replace("file://", "", 1)
+    clean_path = clean_path.split("#")[0].strip()
+
+    # Si está activa la PC remota en Tailscale, proxear el archivo desde allá
+    if is_remote_pc_active():
+        rem_ip = get_active_pc_ip()
+        rem_url = f"https://{rem_ip}:8443/api/download?path={urllib.parse.quote(clean_path)}"
+        def _fetch_rem_file():
+            ctx = ssl._create_unverified_context()
+            req = urllib.request.Request(rem_url, method="GET")
+            with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+                return resp.read(), resp.headers.get("Content-Type", "application/octet-stream")
+        try:
+            body, ctype = await asyncio.to_thread(_fetch_rem_file)
+            fname = os.path.basename(clean_path.rstrip("/")) or "archivo"
+            return web.Response(
+                body=body,
+                content_type=ctype,
+                headers={"Content-Disposition": f'attachment; filename="{fname}"'}
+            )
+        except Exception as e:
+            return web.json_response({"error": f"No se pudo descargar de PC remota: {e}"}, status=404)
+
+    if not os.path.exists(clean_path):
+        return web.json_response({"error": f"Archivo no encontrado: {clean_path}"}, status=404)
+
+    # Si es una carpeta, empaquetarla en un .zip al vuelo
+    if os.path.isdir(clean_path):
+        folder_name = os.path.basename(clean_path.rstrip("/")) or "carpeta"
+        zip_filename = f"{folder_name}.zip"
+        zip_path = os.path.join("/tmp", f"tars_dl_{int(time.time())}_{zip_filename}")
+        def _make_zip():
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for root, dirs, files in os.walk(clean_path):
+                    dirs[:] = [d for d in dirs if d not in (".git", "venv", "node_modules", "__pycache__")]
+                    for file in files:
+                        full_f = os.path.join(root, file)
+                        rel_f = os.path.relpath(full_f, os.path.dirname(clean_path.rstrip("/")))
+                        zf.write(full_f, rel_f)
+            return zip_path
+        await asyncio.to_thread(_make_zip)
+        return web.FileResponse(
+            zip_path,
+            headers={"Content-Disposition": f'attachment; filename="{zip_filename}"'}
+        )
+
+    fname = os.path.basename(clean_path)
+    return web.FileResponse(
+        clean_path,
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'}
+    )
+
+
 async def handle_sync(request):
     last_idx = int(request.query.get("last_index", 0))
     client_chat_id = request.query.get("chat_id", "").strip()
@@ -1337,7 +1453,7 @@ async def handle_sync(request):
                 if rem_data.get("audio_url"):
                     await asyncio.to_thread(ensure_remote_media_cached, rem_ip, rem_data["audio_url"])
                 for m in (rem_data.get("media") or []):
-                    if isinstance(m, dict) and m.get("url"):
+                    if isinstance(m, dict) and m.get("url") and m.get("url", "").startswith("/media/"):
                         await asyncio.to_thread(ensure_remote_media_cached, rem_ip, m["url"])
             return web.json_response(rem_data)
 
@@ -1348,15 +1464,8 @@ async def handle_sync(request):
     latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message)
 
     if chat_changed or (not proc_info.get("is_processing") and latest_idx > last_idx and latest_msg):
-        # Extraer imagenes si las hay
-        img_matches = re.findall(r'(/[\w\-./]+\.(?:png|jpg|jpeg|gif))', latest_msg)
-        for img_path in img_matches:
-            if os.path.exists(img_path):
-                img_name = os.path.basename(img_path)
-                dest = os.path.join(MEDIA_DIR, img_name)
-                if not os.path.exists(dest):
-                    subprocess.run(["cp", img_path, dest])
-                media.append({"type": "image", "url": f"/media/{img_name}", "name": img_name})
+        # Extraer imágenes y archivos generados o linkeados en la respuesta
+        media = await asyncio.to_thread(collect_turn_media_and_files, latest_msg, proc_info)
 
         # Generar TTS solo si no fue cambio de chat
         audio_url = None
@@ -2110,6 +2219,7 @@ def init_app():
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/api/audio", handle_audio)
     app.router.add_get("/api/sync", handle_sync)
+    app.router.add_get("/api/download", handle_download)
     app.router.add_static("/static/", STATIC_DIR)
     app.router.add_static("/media/", MEDIA_DIR)
     return app
