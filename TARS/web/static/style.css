@@ -910,7 +910,24 @@ body {
 
 /* ===== SELECTOR DE MODELO DE IA Y AJUSTE DE HEADER MOVIL ===== */
 .app-header {
-    padding: 10px 12px !important;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 8px 12px !important;
+    gap: 7px;
+}
+
+.header-top-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 8px;
+}
+
+.header-toggles {
+    display: flex;
+    align-items: center;
     gap: 6px;
 }
 
@@ -919,24 +936,34 @@ body {
 }
 
 .connection-info {
-    gap: 5px;
-    flex-wrap: nowrap;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    width: 100%;
+    flex-wrap: wrap;
     min-width: 0;
-    overflow-x: auto;
-    scrollbar-width: none;
-}
-.connection-info::-webkit-scrollbar {
-    display: none;
 }
 
-.pc-sound-toggle-btn, .chat-selector-btn {
+.pc-sound-toggle-btn {
     padding: 5px 9px !important;
-    font-size: 0.76rem !important;
+    font-size: 0.75rem !important;
     flex-shrink: 0;
 }
 
+.chat-selector-btn {
+    padding: 6px 8px !important;
+    font-size: 0.76rem !important;
+    flex: 1 1 0;
+    min-width: 0;
+    justify-content: space-between;
+}
+
 .current-chat-title {
-    max-width: 88px !important;
+    flex: 1;
+    min-width: 0;
+    max-width: none !important;
+    text-align: left;
 }
 
 .model-selector-btn {
