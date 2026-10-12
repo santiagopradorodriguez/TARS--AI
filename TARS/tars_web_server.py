@@ -217,12 +217,29 @@ async def generate_tts_file(text):
         try:
             comm = edge_tts.Communicate(clean_text, TTS_VOICE, rate="-4%")
             await comm.save(filepath)
-            if os.path.exists(filepath):
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                 url = f"/media/{filename}"
                 TTS_CACHE[clean_text] = url
                 return url
         except Exception as e:
-            print(f"[TARS Web] Error en generacion de audio TTS: {e}")
+            print(f"[TARS Web] Error en generacion de audio TTS (edge-tts): {e}, usando fallback...")
+            try:
+                import urllib.parse
+                def _gtts_fallback():
+                    short_q = clean_text[:200]
+                    g_url = f"https://translate.google.com/translate_tts?ie=UTF-8&tl=es&client=tw-ob&q={urllib.parse.quote(short_q)}"
+                    req = urllib.request.Request(g_url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=4.0) as r:
+                        with open(filepath, "wb") as f:
+                            f.write(r.read())
+                await asyncio.to_thread(_gtts_fallback)
+                if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
+                    url = f"/media/{filename}"
+                    TTS_CACHE[clean_text] = url
+                    return url
+            except Exception as e2:
+                print(f"[TARS Web] Fallback TTS tambien fallo: {e2}")
+                TTS_CACHE[clean_text] = None
     return None
 
 def transcribe_wav(wav_path):
