@@ -949,9 +949,13 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
         subprocess.Popen(["gnome-terminal"])
         return "Abriendo una terminal en la PC.", media, sent_to_ide
 
-    # 5. Estado general de TARS (solo si la orden es exactamente esa)
+    # 5. Estado general de TARS o suspension programada hasta las 8 AM
     if cmd_clean in ["como estas", "estado del sistema", "estado de tars", "reporte de estado"]:
         return "Todos los sistemas de TARS estan en linea y conectados a Antigravity.", media, sent_to_ide
+    elif any(kw in cmd_clean for kw in ["suspender hasta las 8", "dormir hasta las 8", "descansar hasta las 8", "suspender pc hasta las 8", "apagar hasta las 8"]):
+        script_path = os.path.join(BASE_DIR, "dormir_hasta_las_8.sh")
+        subprocess.Popen(["bash", "-c", f"sleep 4 && bash '{script_path}' 08:00"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "Perfecto. En 4 segundos la PC entrará en suspensión y volverá a encenderse sola a las 8 de la mañana con Antigravity listo. ¡Buenas noches!", media, sent_to_ide
 
     # 6. Para todo lo demas: Inyectar directamente a esta ventana activa de Antigravity IDE
     if send_to_antigravity_ide(command_text, target_chat_id=target_chat_id, file_paths=file_paths):
