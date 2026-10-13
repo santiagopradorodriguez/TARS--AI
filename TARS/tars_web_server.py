@@ -14,6 +14,25 @@ import urllib.request
 from websockets.sync.client import connect
 from aiohttp import web
 import edge_tts
+try:
+    from email.utils import parsedate_to_datetime as _parsedate_to_datetime
+    from datetime import timezone as _tz
+    from edge_tts import constants as _etts_const, communicate as _etts_comm, drm as _etts_drm
+    _NEW_WSS_URL = (
+        "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1"
+        f"?Ocp-Apim-Subscription-Key={_etts_const.TRUSTED_CLIENT_TOKEN}"
+    )
+    _etts_const.WSS_URL = _NEW_WSS_URL
+    _etts_comm.WSS_URL = _NEW_WSS_URL
+    def _safe_parse_rfc2616_date(date_str):
+        try:
+            p = _parsedate_to_datetime(date_str)
+            return (p.replace(tzinfo=_tz.utc) if p.tzinfo is None else p).timestamp()
+        except Exception:
+            return None
+    _etts_drm.DRM.parse_rfc2616_date = staticmethod(_safe_parse_rfc2616_date)
+except Exception as _e:
+    print(f"[TARS Web] Warning aplicando patch edge_tts: {_e}")
 import vosk
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
