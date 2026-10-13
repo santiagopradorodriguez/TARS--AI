@@ -9,6 +9,7 @@ mkdir -p "$CONFIG_DIR/web/static" "$CONFIG_DIR/web/media"
 
 cp "$REPO_DIR/TARS/tars_web_server.py" "$CONFIG_DIR/tars_web_server.py"
 cp "$REPO_DIR/TARS/speak_response.py" "$CONFIG_DIR/speak_response.py" 2>/dev/null || true
+cp "$REPO_DIR/TARS/tars_voice_engine.py" "$CONFIG_DIR/tars_voice_engine.py" 2>/dev/null || true
 cp "$REPO_DIR/TARS/web/index.html" "$CONFIG_DIR/web/index.html"
 cp "$REPO_DIR/TARS/web/sw.js" "$CONFIG_DIR/web/sw.js" 2>/dev/null || true
 cp "$REPO_DIR/TARS/web/manifest.json" "$CONFIG_DIR/web/manifest.json" 2>/dev/null || true
