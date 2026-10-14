@@ -21,6 +21,16 @@ cp "$REPO_DIR/TARS/web/manifest.json" "$CONFIG_DIR/web/manifest.json" 2>/dev/nul
 cp "$REPO_DIR/TARS/web/static/app.js" "$CONFIG_DIR/web/static/app.js"
 cp "$REPO_DIR/TARS/web/static/style.css" "$CONFIG_DIR/web/static/style.css"
 
+if sudo -n iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "8443"; then
+    true
+else
+    echo "🌐 Habilitando redirección de puertos 443 -> 8443..."
+    sudo -n iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-ports 8443 2>/dev/null || true
+    sudo -n iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 8080 2>/dev/null || true
+    sudo -n iptables -t nat -A OUTPUT -p tcp -d 127.0.0.1 --dport 443 -j REDIRECT --to-ports 8443 2>/dev/null || true
+    sudo -n iptables -t nat -A OUTPUT -p tcp -d 100.x.x.a --dport 443 -j REDIRECT --to-ports 8443 2>/dev/null || true
+fi
+
 if systemctl --user list-unit-files | grep -q "tars-web.service"; then
     echo "🚀 Reiniciando servicio tars-web.service..."
     systemctl --user reset-failed tars-web.service 2>/dev/null || true
