@@ -43,169 +43,85 @@ Antes de empezar, necesitas tener instalado en tu PC:
 
 ---
 
-## Instalación Paso a Paso
+## Instalación Rápida (Recomendada)
 
-### Paso 1 — Clonar el repositorio
+El proyecto incluye un instalador interactivo automatizado que configura todo el entorno, dependencias, modelo de voz offline, certificados SSL y el servicio en segundo plano:
 
 ```bash
 git clone https://github.com/santiagopradorodriguez/TARS--AI.git
 cd TARS--AI
+chmod +x install.sh
+./install.sh
 ```
+
+El script se encargará automáticamente de:
+1. Detectar tu distribución Linux e instalar dependencias del sistema.
+2. Crear el entorno virtual (`venv`) e instalar librerías (`requirements.txt`).
+3. Descargar y configurar el modelo de reconocimiento de voz offline (Vosk en español).
+4. Detectar tu red Tailscale y generar certificados SSL (Let's Encrypt oficial o local).
+5. Configurar e iniciar el servicio en segundo plano `tars-web.service`.
+6. Mostrar en pantalla el **Código QR interactivo** para que escanees desde tu celular.
 
 ---
 
-### Paso 2 — Crear entorno virtual e instalar dependencias
+## Conexión desde el Celular
 
+### 1. Escaneo Rápido con Código QR
+Al finalizar la instalación (o cada vez que ejecutes TARS), la terminal imprimirá un código QR:
+- Abrí la cámara de tu celular (Android o iOS).
+- Apuntá al código QR que aparece en tu monitor.
+- Tocá el enlace para abrir la aplicación directamente.
+
+### 2. Conexión 100% Privada con Tailscale y SSL Oficial (PWA 1-Click)
+Para que Chrome en Android permita instalar TARS como una aplicación nativa real (botón violeta "Instalar App") con candado verde sin advertencias de certificado:
+
+1. Instalá [Tailscale](https://tailscale.com/download) en tu PC y en tu celular.
+2. En tu panel de administración web de Tailscale: [login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns), bajá hasta la sección **HTTPS Certificates** y hacé clic en **"Enable HTTPS"**.
+3. Ejecutá `./install.sh` (o `./actualizar_tars.sh`) en tu PC. TARS detectará automáticamente tu dominio MagicDNS y generará el certificado oficial de **Let's Encrypt**.
+4. Abrí en tu celular tu dominio de Tailscale:
+   ```text
+   https://<tu-maquina>.<tu-red>.ts.net:8443
+   ```
+5. Verás el candado verde 100% seguro y Chrome te ofrecerá instalar la app nativa en tu pantalla de inicio con 1 toque.
+
+---
+
+## Instalación Manual (Avanzada)
+
+Si preferís realizar la instalación paso a paso manualmente:
+
+### Paso 1 — Crear entorno virtual e instalar dependencias
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Dependencias principales que se instalan:
-- `aiohttp`, `websockets` — servidor web asíncrono y bridge CDP
-- `edge-tts` — síntesis de voz neural (voz de Elena y Tomas)
-- `vosk`, `SpeechRecognition` — reconocimiento de voz offline
-- `pywebpush`, `py-vapid` — notificaciones push en Android
-
----
-
-### Paso 3 — Configurar tus credenciales
-
-Copiá el archivo de ejemplo y completalo con tus datos:
-
+### Paso 2 — Descargar modelo Vosk de reconocimiento de voz
 ```bash
-cp .env.example ~/.env
-nano ~/.env
-```
-
-Abrís el archivo y completás estas 3 variables:
-
-```bash
-# 1. Tu API Key de Google Gemini
-#    Conseguila en: https://aistudio.google.com/app/apikey
-GEMINI_API_KEY=AIzaSy...tu_clave_aqui
-
-# 2. La IP de Tailscale de tu PC
-#    Corré: tailscale ip -4
-#    Te va a dar algo como 100.x.x.x
-TARS_LOCAL_IP=100.x.x.x
-
-# 3. Tu email (para las notificaciones push)
-TARS_VAPID_EMAIL=tu_email@gmail.com
-```
-
-> Si no tenés API Key de Gemini, la conseguís gratis en https://aistudio.google.com/app/apikey
-
----
-
-### Paso 4 — Descargar el modelo de voz offline (Vosk)
-
-Para que TARS entienda tu voz sin internet:
-
-```bash
-mkdir -p ~/.gemini/models
-cd ~/.gemini/models
+mkdir -p ~/.config/tars/models
+cd ~/.config/tars/models
 wget https://alphacephei.com/vosk/models/vosk-model-small-es-0.42.zip
 unzip vosk-model-small-es-0.42.zip
 cd -
 ```
 
----
-
-### Paso 5 — Generar los certificados SSL
-
-TARS corre por HTTPS (necesario para el micrófono y las notificaciones en el celular). Generá un certificado auto-firmado:
-
+### Paso 3 — Generar certificados SSL
 ```bash
 mkdir -p TARS/certs
-openssl req -x509 -newkey rsa:4096 -keyout TARS/certs/key.pem -out TARS/certs/cert.pem \
+# Si usas Tailscale con MagicDNS habilitado:
+tailscale cert --cert-file TARS/certs/cert.pem --key-file TARS/certs/key.pem <tu-dominio>.ts.net
+
+# O generar certificado local autofirmado:
+openssl req -x509 -newkey rsa:2048 -keyout TARS/certs/key.pem -out TARS/certs/cert.pem \
   -days 3650 -nodes -subj "/CN=localhost" \
-  -addext "subjectAltName=IP:$(tailscale ip -4),IP:127.0.0.1,DNS:localhost"
+  -addext "subjectAltName=IP:127.0.0.1,IP:$(hostname -I | awk '{print $1}'),DNS:localhost"
 ```
 
-> Los certificados se generan localmente y nunca se suben a GitHub (están en `.gitignore`).
-
----
-
-### Paso 6 — Generar las claves VAPID (notificaciones push)
-
+### Paso 4 — Iniciar el servidor
 ```bash
-mkdir -p ~/.gemini/config
-cd ~/.gemini/config
-python3 -c "
-from py_vapid import Vapid01
-import json, base64
-v = Vapid01()
-v.generate_keys()
-priv = v.private_key.private_bytes(
-    __import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding','PrivateFormat','NoEncryption']).Encoding.PEM,
-    __import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding','PrivateFormat','NoEncryption']).PrivateFormat.TraditionalOpenSSL,
-    __import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding','PrivateFormat','NoEncryption']).NoEncryption()
-).decode()
-pub = base64.urlsafe_b64encode(
-    v.public_key.public_bytes(
-        __import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding','PublicFormat']).Encoding.X962,
-        __import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding','PublicFormat']).PublicFormat.UncompressedPoint
-    )
-).decode().rstrip('=')
-json.dump({'private_key': priv, 'public_key': pub}, open('vapid_keys.json','w'), indent=2)
-print('Claves VAPID generadas en vapid_keys.json')
-"
-cd -
+python3 TARS/tars_web_server.py
 ```
-
----
-
-### Paso 7 — Copiar el servidor al directorio de configuración
-
-```bash
-cp TARS/tars_web_server.py ~/.gemini/config/tars_web_server.py
-```
-
----
-
-### Paso 8 — Configurar el servicio systemd (arranque automático)
-
-Para que TARS arranque solo cuando prendés la PC:
-
-```bash
-mkdir -p ~/.config/systemd/user
-
-cat > ~/.config/systemd/user/tars-web.service << 'EOF'
-[Unit]
-Description=TARS Mobile Web Server & Antigravity Worker Bridge (HTTPS 8443)
-After=network.target graphical-session.target
-
-[Service]
-Type=simple
-WorkingDirectory=%h/.gemini/config
-ExecStart=%h/.gemini/antigravity/scratch/TARS--AI/venv/bin/python3 %h/.gemini/config/tars_web_server.py
-Restart=always
-RestartSec=5
-EnvironmentFile=%h/.env
-
-[Install]
-WantedBy=default.target
-EOF
-
-systemctl --user daemon-reload
-systemctl --user enable tars-web.service
-systemctl --user start tars-web.service
-systemctl --user status tars-web.service
-```
-
-Si todo está bien vas a ver `active (running)`.
-
----
-
-### Paso 9 — Instalar la app en el celular
-
-1. Activá **Tailscale** en tu celular Android/iOS
-2. Abrí **Chrome** y entrá a: `https://<TU-IP-TAILSCALE>:8443`
-   - Reemplazá `<TU-IP-TAILSCALE>` por lo que te dio el comando `tailscale ip -4`
-   - Chrome va a mostrar una advertencia del certificado — tocá **"Configuración avanzada" → "Acceder de todas formas"** (solo la primera vez)
-3. Para instalar como app: tocá el menú de tres puntos arriba a la derecha → **"Instalar aplicación"** o **"Agregar a la pantalla principal"**
 
 ---
 
