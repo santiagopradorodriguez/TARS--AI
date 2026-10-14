@@ -843,10 +843,19 @@ if ('serviceWorker' in navigator) {
 let deferredInstallPrompt = null;
 const pwaInstallBtn = document.getElementById('pwa-install-btn');
 
+// Si ya esta corriendo dentro de la app instalada (modo standalone), ocultamos el boton
+const isRunningStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+                            window.navigator.standalone === true ||
+                            document.referrer.includes('android-app://');
+
+if (pwaInstallBtn && isRunningStandalone) {
+    pwaInstallBtn.style.display = 'none';
+}
+
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredInstallPrompt = e;
-    if (pwaInstallBtn) {
+    if (pwaInstallBtn && !isRunningStandalone) {
         pwaInstallBtn.style.display = 'inline-flex';
     }
 });
@@ -854,14 +863,23 @@ window.addEventListener('beforeinstallprompt', (e) => {
 if (pwaInstallBtn) {
     pwaInstallBtn.addEventListener('click', async () => {
         if (deferredInstallPrompt) {
-            deferredInstallPrompt.prompt();
-            const choiceResult = await deferredInstallPrompt.userChoice;
-            if (choiceResult && choiceResult.outcome === 'accepted') {
-                pwaInstallBtn.style.display = 'none';
+            try {
+                deferredInstallPrompt.prompt();
+                const choiceResult = await deferredInstallPrompt.userChoice;
+                if (choiceResult && choiceResult.outcome === 'accepted') {
+                    pwaInstallBtn.style.display = 'none';
+                }
+            } catch (err) {
+                console.warn('[PWA Install Error]', err);
             }
             deferredInstallPrompt = null;
         } else {
-            alert('Para instalar TARS en tu celular:\n1. Tocá los 3 puntitos (⋮) de Chrome arriba a la derecha.\n2. Elegí "Instalar aplicación" o "Añadir a la pantalla de inicio".');
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+            if (isIOS) {
+                alert('📱 Para instalar TARS en iPhone / iPad:\n\n1. Tocá el botón "Compartir" de Safari (cuadrado con flecha hacia arriba).\n2. Elegí "Agregar a la pantalla de inicio".');
+            } else {
+                alert('📱 Para instalar TARS como App en tu celular:\n\n1. Tocá los 3 puntitos (⋮) arriba a la derecha en Chrome.\n2. Tocá "Instalar aplicación" (o "Agregar a la pantalla principal").\n\nListo, tendrás TARS en tu pantalla principal como una app nativa.');
+            }
         }
     });
 }
