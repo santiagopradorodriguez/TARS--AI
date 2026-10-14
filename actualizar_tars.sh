@@ -40,4 +40,4 @@ if systemctl --user list-unit-files | grep -q "tars-tunnel.service"; then
     systemctl --user disable tars-tunnel.service 2>/dev/null || true
 fi
 
-echo "✅ ¡TARS actualizado y en línea!"
+echo "TARS actualizado y en linea."

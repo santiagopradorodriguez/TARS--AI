@@ -1823,45 +1823,6 @@ def _write_tars_state(updates):
         print(f"[TARS Web] Error guardando estado TARS: {e}")
         return False
 
-def get_security_pin():
-    st = _read_tars_state()
-    pin = st.get("security_pin")
-    if not pin:
-        pin = "1234"
-        _write_tars_state({"security_pin": pin})
-    return str(pin).strip()
-
-def verify_security_pin(candidate):
-    expected = get_security_pin()
-    if not expected:
-        return True
-    return str(candidate or "").strip() == expected
-
-@web.middleware
-async def auth_middleware(request, handler):
-    path = request.path
-    # Rutas públicas sin autenticación (HTML inicial, assets estáticos, service worker, manifest, verificación de PIN, telemetría y domótica local)
-    if (
-        path in ("/", "/manifest.json", "/sw.js", "/api/verify_pin", "/api/auth_status", "/api/system_stats")
-        or path.startswith("/static/")
-        or path.startswith("/api/tuya/")
-    ):
-        return await handler(request)
-
-    user_pin = (
-        request.headers.get("X-TARS-PIN")
-        or request.query.get("pin")
-        or request.cookies.get("tars_pin")
-        or ""
-    )
-    if not verify_security_pin(user_pin):
-        return web.json_response({
-            "error": "Acceso restringido. Se requiere PIN de seguridad.",
-            "auth_required": True
-        }, status=401)
-
-    return await handler(request)
-
 def format_friendly_pc_name(hostname, ip=""):
     h = (hostname or "").strip()
     hl = h.lower()
@@ -2547,169 +2508,11 @@ async def handle_cancel(request):
     res = await asyncio.to_thread(cancel_antigravity_ide)
     return web.json_response(res)
 
-async def handle_auth_status(request):
-    user_pin = (
-        request.headers.get("X-TARS-PIN")
-        or request.query.get("pin")
-        or request.cookies.get("tars_pin")
-        or ""
-    )
-    is_valid = verify_security_pin(user_pin)
-    return web.json_response({
-        "auth_required": True,
-        "authenticated": is_valid
-    })
-
-async def handle_verify_pin(request):
-    try:
-        data = await request.json()
-        candidate = data.get("pin", "")
-        if verify_security_pin(candidate):
-            resp = web.json_response({"success": True, "authenticated": True})
-            resp.set_cookie("tars_pin", str(candidate).strip(), max_age=365*24*3600, samesite="Lax", secure=False)
-            return resp
-        return web.json_response({"success": False, "error": "PIN incorrecto. Intentá nuevamente."}, status=401)
-    except Exception as e:
-        return web.json_response({"success": False, "error": str(e)}, status=500)
-
-async def handle_change_pin(request):
-    try:
-        data = await request.json()
-        current_pin = data.get("current_pin", "")
-        new_pin = str(data.get("new_pin", "")).strip()
-        if not verify_security_pin(current_pin):
-            return web.json_response({"success": False, "error": "El PIN actual es incorrecto."}, status=401)
-        if len(new_pin) < 4:
-            return web.json_response({"success": False, "error": "El nuevo PIN debe tener al menos 4 dígitos."}, status=400)
-        _write_tars_state({"security_pin": new_pin})
-        resp = web.json_response({"success": True, "message": "PIN actualizado exitosamente."})
-        resp.set_cookie("tars_pin", new_pin, max_age=365*24*3600, samesite="Lax", secure=False)
-        return resp
-    except Exception as e:
-        return web.json_response({"success": False, "error": str(e)}, status=500)
-
-def proxy_tuya_request(endpoint: str, payload: dict) -> dict:
-    tuya_url = f"http://127.0.0.1:8080{endpoint}"
-    data = json.dumps(payload if payload is not None else {}).encode("utf-8")
-    req = urllib.request.Request(
-        tuya_url,
-        data=data,
-        headers={"Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=3.5) as resp:
-            content = resp.read().decode("utf-8")
-            try:
-                return json.loads(content)
-            except Exception:
-                return {"success": True, "raw": content}
-    except Exception as e:
-        return {"success": False, "error": f"Error comunicando con luces_tuya en 8080: {e}"}
-
-async def handle_tuya_power(request):
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    res = await asyncio.to_thread(proxy_tuya_request, "/power", data)
-    return web.json_response(res)
-
-async def handle_tuya_color(request):
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    res = await asyncio.to_thread(proxy_tuya_request, "/color", data)
-    return web.json_response(res)
-
-async def handle_tuya_brightness(request):
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    res = await asyncio.to_thread(proxy_tuya_request, "/brightness", data)
-    return web.json_response(res)
-
-_LAST_CPU_TIMES = None
-
-def get_linux_system_stats():
-    global _LAST_CPU_TIMES
-    stats = {
-        "cpu_pct": 0.0,
-        "ram_used_mb": 0,
-        "ram_total_mb": 0,
-        "cpu_temp": None
-    }
-    try:
-        if os.path.exists("/proc/stat"):
-            with open("/proc/stat", "r") as f:
-                fields = [float(x) for x in f.readline().strip().split()[1:]]
-            idle = fields[3] + (fields[4] if len(fields) > 4 else 0.0)
-            total = sum(fields)
-            active = total - idle
-            if _LAST_CPU_TIMES is not None:
-                prev_active, prev_total = _LAST_CPU_TIMES
-                diff_total = total - prev_total
-                diff_active = active - prev_active
-                if diff_total > 0:
-                    stats["cpu_pct"] = max(0.0, min(100.0, round((diff_active / diff_total) * 100.0, 1)))
-            elif hasattr(os, "getloadavg") and os.cpu_count():
-                try:
-                    stats["cpu_pct"] = round(min(100.0, (os.getloadavg()[0] / os.cpu_count()) * 100.0), 1)
-                except Exception:
-                    pass
-            _LAST_CPU_TIMES = (active, total)
-    except Exception:
-        pass
-
-    try:
-        with open("/proc/meminfo", "r") as f:
-            lines = f.readlines()
-        mem = {}
-        for l in lines:
-            parts = l.split(":")
-            if len(parts) == 2:
-                mem[parts[0].strip()] = int(parts[1].strip().split()[0])
-        total_kb = mem.get("MemTotal", 0)
-        avail_kb = mem.get("MemAvailable", 0)
-        stats["ram_total_mb"] = total_kb // 1024
-        stats["ram_used_mb"] = (total_kb - avail_kb) // 1024
-    except Exception:
-        pass
-
-    try:
-        for p in [
-            "/sys/class/thermal/thermal_zone0/temp",
-            "/sys/class/thermal/thermal_zone1/temp",
-            "/sys/class/hwmon/hwmon0/temp1_input",
-            "/sys/class/hwmon/hwmon1/temp1_input",
-        ]:
-            if os.path.exists(p):
-                with open(p, "r") as f:
-                    val = f.read().strip()
-                    if val.isdigit():
-                        stats["cpu_temp"] = round(int(val) / 1000.0, 1)
-                        break
-    except Exception:
-        pass
-
-    return stats
-
-async def handle_system_stats(request):
-    try:
-        stats = await asyncio.to_thread(get_linux_system_stats)
-        return web.json_response(stats)
-    except Exception as e:
-        return web.json_response({"success": False, "error": str(e)}, status=500)
-
 def init_app():
-    app = web.Application(middlewares=[auth_middleware])
+    app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/sw.js", handle_sw)
     app.router.add_get("/manifest.json", handle_manifest)
-    app.router.add_get("/api/auth_status", handle_auth_status)
-    app.router.add_post("/api/verify_pin", handle_verify_pin)
-    app.router.add_post("/api/change_pin", handle_change_pin)
     app.router.add_get("/api/tunnel_url", handle_tunnel_url)
     app.router.add_get("/api/vapid_public_key", handle_vapid_public_key)
     app.router.add_post("/api/push_subscribe", handle_push_subscribe)
@@ -2729,10 +2532,6 @@ def init_app():
     app.router.add_post("/api/audio", handle_audio)
     app.router.add_get("/api/sync", handle_sync)
     app.router.add_get("/api/download", handle_download)
-    app.router.add_post("/api/tuya/power", handle_tuya_power)
-    app.router.add_post("/api/tuya/color", handle_tuya_color)
-    app.router.add_post("/api/tuya/brightness", handle_tuya_brightness)
-    app.router.add_get("/api/system_stats", handle_system_stats)
     app.router.add_static("/static/", STATIC_DIR)
     app.router.add_static("/media/", MEDIA_DIR)
     return app
