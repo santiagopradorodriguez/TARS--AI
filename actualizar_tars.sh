@@ -2,7 +2,11 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_DIR="$HOME/.gemini/config"
+if [ -d "$HOME/.config/tars" ] && [ ! -d "$HOME/.gemini/config" ]; then
+    CONFIG_DIR="$HOME/.config/tars"
+else
+    CONFIG_DIR="$HOME/.gemini/config"
+fi
 
 echo "Actualizando TARS desde $REPO_DIR/TARS hacia $CONFIG_DIR..."
 mkdir -p "$CONFIG_DIR/web/static" "$CONFIG_DIR/web/media"

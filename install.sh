@@ -41,7 +41,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${SCRIPT_DIR}"
 VENV_DIR="${PROJECT_ROOT}/venv"
 REQUIREMENTS_FILE="${PROJECT_ROOT}/requirements.txt"
-VOSK_DIR="${HOME}/.gemini/models/vosk-model-small-es-0.42"
+if [ -d "${HOME}/.gemini/models/vosk-model-small-es-0.42" ]; then
+    VOSK_DIR="${HOME}/.gemini/models/vosk-model-small-es-0.42"
+else
+    VOSK_DIR="${HOME}/.config/tars/models/vosk-model-small-es-0.42"
+fi
 VOSK_ZIP_URL="https://alphacephei.com/vosk/models/vosk-model-small-es-0.42.zip"
 CERTS_DIR="${PROJECT_ROOT}/TARS/certs"
 CERT_FILE="${CERTS_DIR}/cert.pem"
@@ -305,10 +309,15 @@ elif command -v hostname &>/dev/null; then
 fi
 
 TAILSCALE_IP=""
+MAGIC_DNS=""
 if command -v tailscale &>/dev/null; then
     TS_OUT=$(tailscale ip -4 2>/dev/null || true)
     if [ -n "${TS_OUT}" ]; then
         TAILSCALE_IP=$(echo "${TS_OUT}" | awk '{print $1}')
+    fi
+    MAGIC_DNS=$(tailscale status --json 2>/dev/null | grep -o '"DNSName": "[^"]*' | head -n 1 | cut -d'"' -f4 | sed 's/\.$//' || true)
+    if [ -n "${MAGIC_DNS}" ]; then
+        log_info "Detectado dominio Tailscale MagicDNS: ${MAGIC_DNS}"
     fi
 fi
 
@@ -317,38 +326,61 @@ if [ ! -f "${CERT_FILE}" ] || [ ! -f "${KEY_FILE}" ]; then
     log_info "No se encontraron certificados SSL previos. Generando nuevo par de claves..."
     GENERATE_SSL=true
 else
-    log_ok "Certificados SSL encontrados en: ${CERTS_DIR}"
-    if [ "$AUTO_CONFIRM" = false ]; then
-        read -r -p "Deseas regenerar los certificados SSL con tu IP local actual (${LOCAL_IP})? [s/N]: " RESP_SSL
-        case "${RESP_SSL}" in
-            [sS]|[yY]|[sS][iI])
-                GENERATE_SSL=true
-                ;;
-            *)
-                GENERATE_SSL=false
-                ;;
-        esac
+    if openssl x509 -text -noout -in "${CERT_FILE}" 2>/dev/null | grep -qE "Let's Encrypt|\.ts\.net"; then
+        log_ok "Certificado SSL oficial Let's Encrypt / Tailscale valido detectado en: ${CERTS_DIR}"
+        GENERATE_SSL=false
+    else
+        log_ok "Certificados SSL encontrados en: ${CERTS_DIR}"
+        if [ "$AUTO_CONFIRM" = false ]; then
+            read -r -p "Deseas regenerar los certificados SSL con tu IP local actual (${LOCAL_IP})? [s/N]: " RESP_SSL
+            case "${RESP_SSL}" in
+                [sS]|[yY]|[sS][iI])
+                    GENERATE_SSL=true
+                    ;;
+                *)
+                    GENERATE_SSL=false
+                    ;;
+            esac
+        fi
     fi
 fi
 
 if [ "$GENERATE_SSL" = true ]; then
-    SAN="subjectAltName=DNS:localhost,IP:127.0.0.1,IP:${LOCAL_IP}"
-    if [ -n "${TAILSCALE_IP}" ]; then
-        SAN="${SAN},IP:${TAILSCALE_IP}"
-        log_info "Incluyendo IP de Tailscale detectada: ${TAILSCALE_IP}"
+    TAILSCALE_CERT_OK=false
+    if [ -n "${MAGIC_DNS}" ]; then
+        log_info "Intentando generar certificado SSL oficial con Tailscale para: ${MAGIC_DNS}..."
+        if tailscale cert --cert-file "${CERT_FILE}" --key-file "${KEY_FILE}" "${MAGIC_DNS}" 2>/dev/null; then
+            chmod 600 "${KEY_FILE}"
+            chmod 644 "${CERT_FILE}"
+            log_ok "Certificado SSL oficial Let's Encrypt generado exitosamente para ${MAGIC_DNS}."
+            TAILSCALE_CERT_OK=true
+        else
+            log_warn "No se pudo emitir certificado oficial via Tailscale (posiblemente requiera 'Enable HTTPS' en login.tailscale.com/admin/dns). Generando certificado local..."
+        fi
     fi
 
-    log_info "Generando certificado autofirmado para IP: ${LOCAL_IP}..."
-    openssl req -x509 -newkey rsa:2048 -nodes \
-        -keyout "${KEY_FILE}" \
-        -out "${CERT_FILE}" \
-        -days 3650 \
-        -subj "/CN=${LOCAL_IP}" \
-        -addext "${SAN}" >/dev/null 2>&1
+    if [ "$TAILSCALE_CERT_OK" = false ]; then
+        SAN="subjectAltName=DNS:localhost,IP:127.0.0.1,IP:${LOCAL_IP}"
+        if [ -n "${TAILSCALE_IP}" ]; then
+            SAN="${SAN},IP:${TAILSCALE_IP}"
+            log_info "Incluyendo IP de Tailscale detectada: ${TAILSCALE_IP}"
+        fi
+        if [ -n "${MAGIC_DNS}" ]; then
+            SAN="${SAN},DNS:${MAGIC_DNS}"
+        fi
 
-    chmod 600 "${KEY_FILE}"
-    chmod 644 "${CERT_FILE}"
-    log_ok "Certificados SSL generados exitosamente en ${CERTS_DIR}."
+        log_info "Generando certificado autofirmado para IP: ${LOCAL_IP}..."
+        openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "${KEY_FILE}" \
+            -out "${CERT_FILE}" \
+            -days 3650 \
+            -subj "/CN=${LOCAL_IP}" \
+            -addext "${SAN}" >/dev/null 2>&1
+
+        chmod 600 "${KEY_FILE}"
+        chmod 644 "${CERT_FILE}"
+        log_ok "Certificados SSL generados exitosamente en ${CERTS_DIR}."
+    fi
 fi
 
 # ------------------------------------------------------------------------------
@@ -465,9 +497,32 @@ echo "   systemctl --user restart tars-web.service"
 echo "   systemctl --user stop tars-web.service"
 echo ""
 echo "5. Direccion de acceso web movil (con SSL):"
-echo "   https://${LOCAL_IP}:8443"
-if [ -n "${TAILSCALE_IP}" ]; then
-    echo "   https://${TAILSCALE_IP}:8443 (Tailscale)"
+PRIMARY_URL="https://${LOCAL_IP}:8443"
+if [ -n "${MAGIC_DNS}" ]; then
+    PRIMARY_URL="https://${MAGIC_DNS}:8443"
+    echo "   https://${MAGIC_DNS}:8443 (SSL Oficial Let's Encrypt - PWA 1-Click)"
 fi
-echo ""
+echo "   https://${LOCAL_IP}:8443 (Red local)"
+if [ -n "${TAILSCALE_IP}" ]; then
+    echo "   https://${TAILSCALE_IP}:8443 (Tailscale IP)"
+fi
+
+if [ -x "${VENV_DIR}/bin/python" ]; then
+    "${VENV_DIR}/bin/python" -c "
+try:
+    import qrcode
+    qr = qrcode.QRCode(border=1)
+    qr.add_data('${PRIMARY_URL}')
+    qr.make(fit=True)
+    print('\n==============================================================================')
+    print(' ESCANEA ESTE CODIGO QR CON LA CAMARA DE TU CELULAR PARA ABRIR TARS:')
+    print('==============================================================================')
+    qr.print_ascii(invert=True)
+    print(' URL: ${PRIMARY_URL}')
+    print('==============================================================================\n')
+except Exception:
+    pass
+" 2>/dev/null || true
+fi
+
 echo "=============================================================================="

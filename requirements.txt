@@ -13,3 +13,7 @@ requests
 sounddevice
 SpeechRecognition
 vosk
+aiohttp
+pywebpush
+cryptography
+qrcode

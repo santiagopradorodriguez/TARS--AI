@@ -64,8 +64,21 @@ CERTS_DIR = os.path.join(BASE_DIR, "certs")
 CERT_FILE = os.path.join(CERTS_DIR, "cert.pem")
 KEY_FILE = os.path.join(CERTS_DIR, "key.pem")
 
-VOSK_MODEL_PATH = "/home/santiago/.gemini/models/vosk-model-small-es-0.42"
-TTS_VOICE = "es-AR-ElenaNeural"
+USER_HOME = os.path.expanduser("~")
+DEFAULT_CONFIG_DIR = os.environ.get("TARS_CONFIG_DIR") or (
+    os.path.join(USER_HOME, ".gemini", "config")
+    if os.path.exists(os.path.join(USER_HOME, ".gemini", "config"))
+    else os.path.join(USER_HOME, ".config", "tars")
+)
+os.makedirs(DEFAULT_CONFIG_DIR, exist_ok=True)
+
+VOSK_CANDIDATES = [
+    os.path.join(USER_HOME, ".gemini", "models", "vosk-model-small-es-0.42"),
+    os.path.join(USER_HOME, ".config", "tars", "models", "vosk-model-small-es-0.42"),
+    os.path.join(BASE_DIR, "models", "vosk-model-small-es-0.42"),
+]
+VOSK_MODEL_PATH = os.environ.get("VOSK_MODEL_PATH") or next((p for p in VOSK_CANDIDATES if os.path.exists(p)), VOSK_CANDIDATES[0])
+TTS_VOICE = os.environ.get("TARS_VOICE", "es-AR-ElenaNeural")
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
 
@@ -329,8 +342,12 @@ def transcribe_wav(wav_path):
 def query_antigravity(prompt_text):
     print(f"[TARS Web] Consultando a Antigravity (rapido): {prompt_text}")
     try:
+        import shutil
+        agy_bin = shutil.which("agy") or os.path.expanduser("~/.local/bin/agy")
+        if not os.path.exists(agy_bin) and os.path.exists("/usr/local/bin/agy"):
+            agy_bin = "/usr/local/bin/agy"
         cmd = [
-            "/home/santiago/.local/bin/agy",
+            agy_bin,
             "--model", "gemini-3.8-flash-low",
             "--effort", "low",
             "--mode", "accept-edits",
@@ -1801,7 +1818,7 @@ async def handle_chat_history(request):
     return web.json_response(data)
 
 
-TARS_STATE_FILE = "/home/santiago/.gemini/config/tars_state.json"
+TARS_STATE_FILE = os.path.join(DEFAULT_CONFIG_DIR, "tars_state.json")
 
 def _read_tars_state():
     try:
@@ -2345,8 +2362,8 @@ async def handle_switch_model(request):
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 NTFY_TOPIC = "tars_santiago_a03"
-VAPID_FILE = "/home/santiago/.gemini/config/vapid_keys.json"
-SUBSCRIPTIONS_FILE = "/home/santiago/.gemini/config/push_subscriptions.json"
+VAPID_FILE = os.path.join(DEFAULT_CONFIG_DIR, "vapid_keys.json")
+SUBSCRIPTIONS_FILE = os.path.join(DEFAULT_CONFIG_DIR, "push_subscriptions.json")
 LAST_NOTIFIED_STEP = {"idx": 0}
 
 def get_vapid_keys():
@@ -2557,13 +2574,54 @@ def get_tailscale_ip():
         pass
     return None
 
+def get_tailscale_magicdns():
+    try:
+        out = subprocess.check_output(["tailscale", "status", "--json"], text=True, timeout=2.5)
+        data = json.loads(out)
+        self_node = data.get("Self", {})
+        dns_name = self_node.get("DNSName", "").rstrip(".")
+        if dns_name and ".ts.net" in dns_name:
+            return dns_name
+    except Exception:
+        pass
+    return None
+
+def print_connection_qr(url):
+    try:
+        import qrcode
+        qr = qrcode.QRCode(border=1)
+        qr.add_data(url)
+        qr.make(fit=True)
+        print("\n" + "=" * 52)
+        print("   CONECTAR DESDE EL CELULAR (ESCANEA EL CODIGO QR):")
+        print("=" * 52)
+        qr.print_ascii(invert=True)
+        print(f" URL: {url}")
+        print("=" * 52 + "\n")
+    except Exception:
+        print(f"[TARS Web] Acceso movil disponible en: {url}")
+
 def ensure_ssl_certificates(local_ip, tailscale_ip=None):
     os.makedirs(CERTS_DIR, exist_ok=True)
+    magic_dns = get_tailscale_magicdns()
+
+    # Si hay MagicDNS de Tailscale y no hay certificados, intentar obtener certificado oficial Let's Encrypt
+    if magic_dns and not (os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE)):
+        try:
+            print(f"[TARS Web] Detectado dominio Tailscale: {magic_dns}. Solicitando certificado SSL oficial...")
+            cmd = ["tailscale", "cert", "--cert-file", CERT_FILE, "--key-file", KEY_FILE, magic_dns]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if res.returncode == 0 and os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
+                print(f"[TARS Web] Certificado SSL oficial Let's Encrypt generado exitosamente para {magic_dns}")
+                return
+        except Exception as e:
+            print(f"[TARS Web] Nota sobre certificado Tailscale: {e}")
+
     needs_gen = not (os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE))
     if not needs_gen:
         try:
             out = subprocess.check_output(["openssl", "x509", "-text", "-noout", "-in", CERT_FILE], text=True)
-            if "Let's Encrypt" in out or "tail0ec03b.ts.net" in out or "Tailscale" in out:
+            if "Let's Encrypt" in out or ".ts.net" in out or "Tailscale" in out:
                 needs_gen = False
             else:
                 if f"IP Address:{local_ip}" not in out and f"IP:{local_ip}" not in out:
@@ -2583,6 +2641,8 @@ def ensure_ssl_certificates(local_ip, tailscale_ip=None):
             "IP:127.0.0.1",
             f"IP:{local_ip}"
         ]
+        if magic_dns:
+            san_parts.append(f"DNS:{magic_dns}")
         if tailscale_ip:
             san_parts.append(f"IP:{tailscale_ip}")
             san_parts.append("DNS:pop-os")
@@ -2756,13 +2816,28 @@ async def async_main():
             await http_site.start()
         except Exception as e:
             print(f"[TARS Web] Puerto HTTP {http_port} ocupado ({e}), continuando en 8443.")
+        magic_dns = get_tailscale_magicdns()
+        primary_url = None
+        if magic_dns:
+            primary_url = f"https://{magic_dns}:{port}"
+        elif ts_ip:
+            primary_url = f"https://{ts_ip}:{port}"
+        else:
+            primary_url = f"https://{local_ip}:{port}"
+
+        host_label = socket.gethostname().lower()
         print(f"[TARS Web] SSL + Auto-Redirect HTTP->HTTPS habilitado en puerto {port} (y HTTP en {http_port}):")
-        print(f"           - https://santiago-lenovo-yoga-510-14isk.tail0ec03b.ts.net:{port} (SSL Oficial Let's Encrypt - PWA)")
+        if magic_dns:
+            print(f"           - https://{magic_dns}:{port} (SSL Oficial Let's Encrypt - PWA)")
         print(f"           - https://{local_ip}:{port}")
-        print(f"           - https://pop-os.local:{port}")
+        print(f"           - https://{host_label}.local:{port}")
         if ts_ip:
             print(f"           - https://{ts_ip}:{port} (Remoto Tailscale)")
             print(f"           - http://{ts_ip}:{http_port} (HTTP directo)")
+
+        if primary_url:
+            print_connection_qr(primary_url)
+
         await server_8443.serve_forever()
     else:
         site = web.TCPSite(runner, "0.0.0.0", port)
