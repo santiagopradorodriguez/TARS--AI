@@ -456,6 +456,17 @@ body {
     border-color: #ef4444;
 }
 
+.pc-sound-toggle-btn.install-btn {
+    background-color: rgba(99, 102, 241, 0.2);
+    border-color: rgba(99, 102, 241, 0.5);
+    color: #a5b4fc;
+}
+
+.pc-sound-toggle-btn.install-btn:hover, .pc-sound-toggle-btn.install-btn:active {
+    background-color: rgba(99, 102, 241, 0.35);
+    border-color: #6366f1;
+}
+
 /* Modal Selector de Chats */
 .chats-modal {
     position: fixed;

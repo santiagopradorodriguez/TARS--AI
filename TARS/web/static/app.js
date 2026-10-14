@@ -824,12 +824,52 @@ if (mobileVoiceToggleBtn) {
 }
 
 if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').then((reg) => {
+            console.log('[TARS PWA] Service Worker registrado:', reg.scope);
+        }).catch((err) => {
+            console.warn('[TARS PWA] Error registrando SW:', err);
+        });
+    });
+
     navigator.serviceWorker.addEventListener('message', (event) => {
         if (event.data && event.data.type === 'SET_MOBILE_VOICE_MUTE') {
             updateMobileVoiceUI(Boolean(event.data.muted));
         }
     });
 }
+
+// Manejador de instalacion de PWA en celular
+let deferredInstallPrompt = null;
+const pwaInstallBtn = document.getElementById('pwa-install-btn');
+
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    if (pwaInstallBtn) {
+        pwaInstallBtn.style.display = 'inline-flex';
+    }
+});
+
+if (pwaInstallBtn) {
+    pwaInstallBtn.addEventListener('click', async () => {
+        if (deferredInstallPrompt) {
+            deferredInstallPrompt.prompt();
+            const choiceResult = await deferredInstallPrompt.userChoice;
+            if (choiceResult && choiceResult.outcome === 'accepted') {
+                pwaInstallBtn.style.display = 'none';
+            }
+            deferredInstallPrompt = null;
+        } else {
+            alert('Para instalar TARS en tu celular:\n1. Tocá los 3 puntitos (⋮) de Chrome arriba a la derecha.\n2. Elegí "Instalar aplicación" o "Añadir a la pantalla de inicio".');
+        }
+    });
+}
+
+window.addEventListener('appinstalled', () => {
+    if (pwaInstallBtn) pwaInstallBtn.style.display = 'none';
+    deferredInstallPrompt = null;
+});
 
 if ('mediaSession' in navigator) {
     try {

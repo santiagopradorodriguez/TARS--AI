@@ -6,6 +6,15 @@ self.addEventListener('activate', (event) => {
     event.waitUntil(self.clients.claim());
 });
 
+self.addEventListener('fetch', (event) => {
+    // Requerido por los criterios de instalacion de PWA en Google Chrome
+    if (event.request.method === 'GET') {
+        event.respondWith(
+            fetch(event.request).catch(() => caches.match(event.request))
+        );
+    }
+});
+
 self.addEventListener('push', (event) => {
     let payload = {
         title: '🤖 TARS • Antigravity',
