@@ -2563,10 +2563,13 @@ def ensure_ssl_certificates(local_ip, tailscale_ip=None):
     if not needs_gen:
         try:
             out = subprocess.check_output(["openssl", "x509", "-text", "-noout", "-in", CERT_FILE], text=True)
-            if f"IP Address:{local_ip}" not in out and f"IP:{local_ip}" not in out:
-                needs_gen = True
-            if tailscale_ip and f"IP Address:{tailscale_ip}" not in out:
-                needs_gen = True
+            if "Let's Encrypt" in out or "tail0ec03b.ts.net" in out or "Tailscale" in out:
+                needs_gen = False
+            else:
+                if f"IP Address:{local_ip}" not in out and f"IP:{local_ip}" not in out:
+                    needs_gen = True
+                if tailscale_ip and f"IP Address:{tailscale_ip}" not in out:
+                    needs_gen = True
         except Exception:
             needs_gen = True
 
@@ -2754,6 +2757,7 @@ async def async_main():
         except Exception as e:
             print(f"[TARS Web] Puerto HTTP {http_port} ocupado ({e}), continuando en 8443.")
         print(f"[TARS Web] SSL + Auto-Redirect HTTP->HTTPS habilitado en puerto {port} (y HTTP en {http_port}):")
+        print(f"           - https://santiago-lenovo-yoga-510-14isk.tail0ec03b.ts.net:{port} (SSL Oficial Let's Encrypt - PWA)")
         print(f"           - https://{local_ip}:{port}")
         print(f"           - https://pop-os.local:{port}")
         if ts_ip:
