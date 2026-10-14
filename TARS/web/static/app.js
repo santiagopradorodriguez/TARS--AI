@@ -877,9 +877,21 @@ if (pwaInstallBtn) {
             const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
             if (isIOS) {
                 alert('📱 Para instalar TARS en iPhone / iPad:\n\n1. Tocá el botón "Compartir" de Safari (cuadrado con flecha hacia arriba).\n2. Elegí "Agregar a la pantalla de inicio".');
-            } else {
-                alert('📱 Para instalar TARS como App en tu celular:\n\n1. Tocá los 3 puntitos (⋮) arriba a la derecha en Chrome.\n2. Tocá "Instalar aplicación" (o "Agregar a la pantalla principal").\n\nListo, tendrás TARS en tu pantalla principal como una app nativa.');
+                return;
             }
+
+            try {
+                const res = await fetch('/api/tunnel_url');
+                const tdata = await res.json();
+                if (tdata.tunnel_url && !window.location.origin.includes('trycloudflare.com')) {
+                    if (confirm('🔒 Google Chrome en Android bloquea compilar Apps desde IPs privadas con certificado local.\n\n¿Querés abrir TARS con el enlace seguro de Cloudflare para instalar la App directamente en 1 clic?')) {
+                        window.location.href = tdata.tunnel_url;
+                        return;
+                    }
+                }
+            } catch (err) {}
+
+            alert('📱 Para instalar TARS en tu celular:\n\nOpción 1 (Chrome): Tocá los 3 puntitos (⋮) > "Agregar a la pantalla principal".\n\nOpción 2 (Samsung): Abrí esta página en el navegador "Samsung Internet" y tocalo desde la barra para instalarlo.');
         }
     });
 }

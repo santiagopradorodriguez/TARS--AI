@@ -2356,7 +2356,7 @@ async def handle_test_notify(request):
 async def handle_manifest(request):
     manifest_path = os.path.join(WEB_DIR, "manifest.json")
     if os.path.exists(manifest_path):
-        return web.FileResponse(manifest_path, headers={"Content-Type": "application/json"})
+        return web.FileResponse(manifest_path, headers={"Content-Type": "application/manifest+json"})
     return web.Response(text="Manifest no encontrado", status=404)
 
 async def handle_tunnel_url(request):
