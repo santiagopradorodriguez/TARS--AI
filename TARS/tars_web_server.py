@@ -453,29 +453,49 @@ def get_antigravity_chats():
     try:
         js = """
         (() => {
-            const links = Array.from(document.querySelectorAll('a[href*="/c/"]'));
             const currentId = window.location.pathname.replace('/c/', '').split('?')[0];
             const seen = new Set();
             const chats = [];
-            links.forEach(a => {
-                const href = a.getAttribute('href');
-                const match = href.match(/\\/c\\/([a-f0-9\\-]+)/);
-                if (match && !seen.has(match[1])) {
-                    seen.add(match[1]);
-                    let title = a.getAttribute('aria-label') || a.innerText.trim().replace(/\\n+/g, ' ');
-                    if (!title && a.parentElement) {
-                        title = a.parentElement.innerText.split('\\n')[0].trim();
-                    }
-                    if (!title) {
-                        title = 'Conversacion ' + match[1].slice(0, 8);
-                    }
+
+            // 1. Antigravity nuevo: convo-pill
+            const pills = Array.from(document.querySelectorAll('[data-testid^="convo-pill-"]'));
+            pills.forEach(p => {
+                const id = (p.getAttribute('data-testid') || '').replace('convo-pill-', '').trim();
+                if (id && !seen.has(id)) {
+                    seen.add(id);
+                    const title = p.innerText.trim() || ('Conversacion ' + id.slice(0, 8));
                     chats.push({
-                        id: match[1],
+                        id: id,
                         title: title,
-                        active: match[1] === currentId
+                        active: id === currentId
                     });
                 }
             });
+
+            // 2. Fallback: enlaces a[href*="/c/"]
+            if (chats.length === 0) {
+                const links = Array.from(document.querySelectorAll('a[href*="/c/"]'));
+                links.forEach(a => {
+                    const href = a.getAttribute('href') || '';
+                    const match = href.match(/\\/c\\/([a-f0-9\\-]+)/);
+                    if (match && !seen.has(match[1])) {
+                        seen.add(match[1]);
+                        let title = a.getAttribute('aria-label') || a.innerText.trim().replace(/\\n+/g, ' ');
+                        if (!title && a.parentElement) {
+                            title = a.parentElement.innerText.split('\\n')[0].trim();
+                        }
+                        if (!title) {
+                            title = 'Conversacion ' + match[1].slice(0, 8);
+                        }
+                        chats.push({
+                            id: match[1],
+                            title: title,
+                            active: match[1] === currentId
+                        });
+                    }
+                });
+            }
+
             return { current_id: currentId, chats: chats };
         })()
         """
@@ -595,6 +615,13 @@ def switch_antigravity_chat(target):
     js_click = f"""
     (() => {{
         const targetId = "{target_id}";
+        const pill = document.querySelector('[data-testid="convo-pill-' + targetId + '"]');
+        if (pill) {{
+            const btn = pill.closest('[role="button"]') || pill;
+            btn.click();
+            const title = pill.innerText.trim() || targetId;
+            return {{ success: true, id: targetId, title: title }};
+        }}
         const link = document.querySelector('a[href*="/c/' + targetId + '"]');
         if (link) {{
             link.click();
