@@ -337,9 +337,14 @@ def get_devtools_ws_url():
         req = urllib.request.Request(f"http://127.0.0.1:{port}/json/list")
         with urllib.request.urlopen(req, timeout=1.5) as resp:
             targets = json.loads(resp.read().decode())
-            for t in targets:
-                if t.get("type") == "page" and "127.0.0.1" in t.get("url", ""):
+            page_targets = [t for t in targets if t.get("type") == "page"]
+            for t in page_targets:
+                url = t.get("url", "")
+                title = t.get("title", "")
+                if "127.0.0.1" in url or "localhost" in url or "/c/" in url or "antigravity" in url.lower() or "Antigravity" in title:
                     return t.get("webSocketDebuggerUrl")
+            if page_targets:
+                return page_targets[0].get("webSocketDebuggerUrl")
     except Exception as e:
         print(f"[TARS Web] Error obteniendo DevTools WS: {e}")
     return None
@@ -378,39 +383,120 @@ def get_current_antigravity_convo_id():
     return None
 
 
+def get_chats_from_disk():
+    """Fallback y complemento: busca todas las conversaciones guardadas en ~/.gemini/antigravity/brain."""
+    brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
+    if not os.path.exists(brain_dir):
+        return []
+
+    chats = []
+    try:
+        for convo_id in os.listdir(brain_dir):
+            if convo_id.startswith(".") or convo_id == "tempmediaStorage":
+                continue
+            transcript_path = os.path.join(brain_dir, convo_id, ".system_generated", "logs", "transcript.jsonl")
+            if not os.path.exists(transcript_path):
+                continue
+
+            mtime = os.path.getmtime(transcript_path)
+            title = f"Chat {convo_id[:8]}"
+            try:
+                with open(transcript_path, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        try:
+                            step = json.loads(line)
+                            if step.get("type") == "USER_INPUT" and step.get("source") == "USER_EXPLICIT":
+                                content = step.get("content", "")
+                                match = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", content, re.DOTALL)
+                                prompt_text = match.group(1).strip() if match else content.strip()
+                                if prompt_text:
+                                    first_line = prompt_text.split("\n")[0].strip()
+                                    if first_line:
+                                        title = first_line[:45]
+                                        break
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            chats.append({"id": convo_id, "title": title, "mtime": mtime})
+
+        chats.sort(key=lambda x: x.get("mtime", 0), reverse=True)
+    except Exception as e:
+        print(f"[TARS Web] Error leyendo chats de disco: {e}")
+
+    return chats
+
+
 def get_antigravity_chats():
-    js = """
-    (() => {
-        const links = Array.from(document.querySelectorAll('a[href*="/c/"]'));
-        const currentId = window.location.pathname.replace('/c/', '').split('?')[0];
-        const seen = new Set();
-        const chats = [];
-        links.forEach(a => {
-            const href = a.getAttribute('href');
-            const match = href.match(/\\/c\\/([a-f0-9\\-]+)/);
-            if (match && !seen.has(match[1])) {
-                seen.add(match[1]);
-                let title = a.getAttribute('aria-label') || a.innerText.trim().replace(/\\n+/g, ' ');
-                if (!title && a.parentElement) {
-                    title = a.parentElement.innerText.split('\\n')[0].trim();
+    cdp_res = None
+    try:
+        js = """
+        (() => {
+            const links = Array.from(document.querySelectorAll('a[href*="/c/"]'));
+            const currentId = window.location.pathname.replace('/c/', '').split('?')[0];
+            const seen = new Set();
+            const chats = [];
+            links.forEach(a => {
+                const href = a.getAttribute('href');
+                const match = href.match(/\\/c\\/([a-f0-9\\-]+)/);
+                if (match && !seen.has(match[1])) {
+                    seen.add(match[1]);
+                    let title = a.getAttribute('aria-label') || a.innerText.trim().replace(/\\n+/g, ' ');
+                    if (!title && a.parentElement) {
+                        title = a.parentElement.innerText.split('\\n')[0].trim();
+                    }
+                    if (!title) {
+                        title = 'Conversacion ' + match[1].slice(0, 8);
+                    }
+                    chats.push({
+                        id: match[1],
+                        title: title,
+                        active: match[1] === currentId
+                    });
                 }
-                if (!title) {
-                    title = 'Conversacion ' + match[1].slice(0, 8);
-                }
-                chats.push({
-                    id: match[1],
-                    title: title,
-                    active: match[1] === currentId
-                });
-            }
-        });
-        return { current_id: currentId, chats: chats };
-    })()
-    """
-    res = eval_in_antigravity(js)
-    if isinstance(res, dict):
-        return res
-    return {"current_id": "", "chats": []}
+            });
+            return { current_id: currentId, chats: chats };
+        })()
+        """
+        cdp_res = eval_in_antigravity(js)
+    except Exception as e:
+        print(f"[TARS Web] Error en get_antigravity_chats CDP: {e}")
+
+    current_id = ""
+    dom_chats = []
+    if isinstance(cdp_res, dict):
+        current_id = cdp_res.get("current_id", "") or ""
+        dom_chats = cdp_res.get("chats", []) or []
+
+    disk_chats = get_chats_from_disk()
+
+    if not current_id and disk_chats:
+        current_id = disk_chats[0]["id"]
+
+    seen_ids = set()
+    merged_chats = []
+
+    for c in dom_chats:
+        cid = c.get("id")
+        if cid and cid not in seen_ids:
+            seen_ids.add(cid)
+            merged_chats.append({
+                "id": cid,
+                "title": c.get("title") or f"Chat {cid[:8]}",
+                "active": cid == current_id
+            })
+
+    for c in disk_chats:
+        cid = c.get("id")
+        if cid and cid not in seen_ids:
+            seen_ids.add(cid)
+            merged_chats.append({
+                "id": cid,
+                "title": c.get("title") or f"Chat {cid[:8]}",
+                "active": cid == current_id
+            })
+
+    return {"current_id": current_id, "chats": merged_chats}
 
 
 def switch_antigravity_chat(target):
