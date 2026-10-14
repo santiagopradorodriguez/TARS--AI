@@ -1,0 +1,14 @@
+[Unit]
+Description=TARS Mobile WebApp Server
+After=network.target
+
+[Service]
+Type=simple
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=%h/repositorios/Jarvis-Assistant/TARS
+ExecStart=%h/repositorios/Jarvis-Assistant/venv/bin/python -u %h/repositorios/Jarvis-Assistant/TARS/tars_web_server.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

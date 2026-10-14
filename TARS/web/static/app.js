@@ -1011,9 +1011,68 @@ async function loadChatsList() {
     }
 }
 
+function renderChatHistory(messages, lastStepIndex) {
+    if (!chatContainer || !Array.isArray(messages)) return;
+    chatContainer.innerHTML = '';
+    renderedStepIndices.clear();
+
+    if (messages.length === 0) {
+        const title = currentChatTitle ? currentChatTitle.innerText : 'Conversacion';
+        appendMessage('assistant', `Chat activo: ${title}. Puedes hablar o escribir para continuar.`, null, null, false);
+        currentSyncIndex = 0;
+        return;
+    }
+
+    messages.forEach(msg => {
+        const isAssistant = (msg.role === 'assistant');
+        appendMessage(
+            isAssistant ? 'assistant' : 'user',
+            msg.content,
+            msg.media || null,
+            null,
+            false
+        );
+        if (msg.step_index) {
+            renderedStepIndices.add(msg.step_index);
+        }
+    });
+
+    if (lastStepIndex) {
+        currentSyncIndex = lastStepIndex;
+    }
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+}
+
+let isLoadingHistory = false;
+async function loadChatHistory(chatId) {
+    if (!chatId || isLoadingHistory) return;
+    isLoadingHistory = true;
+    try {
+        const resp = await fetch(`/api/chat_history?chat_id=${encodeURIComponent(chatId)}&limit=10`);
+        const data = await resp.json();
+        if (data && Array.isArray(data.messages)) {
+            renderChatHistory(data.messages, data.last_step_index);
+        }
+    } catch (e) {
+        console.warn('[TARS Web] Error cargando historial:', e);
+    } finally {
+        isLoadingHistory = false;
+    }
+}
+
 async function switchAntigravityChat(target) {
     closeChatsModal();
-    micStatusLabel.innerText = 'Cambiando de chat...';
+    if (chatContainer) {
+        chatContainer.innerHTML = `
+            <div class="chat-loading-placeholder">
+                <div class="loading-spinner"></div>
+                <span>Cambiando chats, por favor espere...</span>
+            </div>
+        `;
+    }
+    if (micStatusLabel) {
+        micStatusLabel.innerText = 'Cambiando chats, por favor espere...';
+    }
     try {
         const resp = await fetch('/api/switch_chat', {
             method: 'POST',
@@ -1028,8 +1087,13 @@ async function switchAntigravityChat(target) {
             if (res.id) {
                 activeChatId = res.id;
             }
-            currentSyncIndex = 0;
-            appendMessage('assistant', `Cambiado al chat: ${res.title}`, null, null, false);
+
+            if (Array.isArray(res.messages) && res.messages.length > 0) {
+                renderChatHistory(res.messages, res.last_step_index);
+            } else {
+                await loadChatHistory(activeChatId);
+            }
+
             micStatusLabel.innerText = 'Toca para hablar';
             syncWithAntigravity();
         } else {
@@ -1051,6 +1115,9 @@ async function loadInitialChatTitle() {
         const activeChat = chats.find(c => c.active || c.id === activeChatId);
         if (activeChat && currentChatTitle) {
             currentChatTitle.innerText = activeChat.title;
+        }
+        if (activeChatId) {
+            await loadChatHistory(activeChatId);
         }
     } catch (e) {
         // Silencioso
@@ -1668,13 +1735,21 @@ async function syncWithAntigravity() {
         }
 
         if (data.chat_changed) {
-            loadInitialChatTitle();
-            renderedStepIndices.clear();
-            currentSyncIndex = data.step_index;
-            if (data.step_index) renderedStepIndices.add(data.step_index);
-            if (data.content) {
-                appendMessage('assistant', data.content, data.media, data.audio_url, false);
+            if (chatContainer) {
+                chatContainer.innerHTML = `
+                    <div class="chat-loading-placeholder">
+                        <div class="loading-spinner"></div>
+                        <span>Cambiando chats, por favor espere...</span>
+                    </div>
+                `;
             }
+            if (micStatusLabel) {
+                micStatusLabel.innerText = 'Cambiando chats, por favor espere...';
+            }
+            renderedStepIndices.clear();
+            currentSyncIndex = data.step_index || 0;
+            await loadInitialChatTitle();
+            if (micStatusLabel) micStatusLabel.innerText = 'Toca para hablar';
         } else if (data.has_new && data.step_index > currentSyncIndex && !renderedStepIndices.has(data.step_index)) {
             removeProcessingBubble();
             clearUserCancelChips();

@@ -7,17 +7,24 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-    // Requerido por los criterios de instalacion de PWA en Google Chrome
+    // No interceptar llamadas a APIs ni WebSockets para evitar romper la sincronizacion
+    if (event.request.url.includes('/api/') || event.request.url.includes('/ws')) {
+        return;
+    }
     if (event.request.method === 'GET') {
         event.respondWith(
-            fetch(event.request).catch(() => caches.match(event.request))
+            fetch(event.request).catch(async () => {
+                const cached = await caches.match(event.request);
+                if (cached) return cached;
+                return new Response('Offline', { status: 503, statusText: 'Offline' });
+            })
         );
     }
 });
 
 self.addEventListener('push', (event) => {
     let payload = {
-        title: '🤖 TARS • Antigravity',
+        title: 'TARS - Antigravity',
         body: 'Nuevo mensaje recibido',
         url: '/',
         voice_muted: false
@@ -42,11 +49,11 @@ self.addEventListener('push', (event) => {
         actions: [
             {
                 action: 'toggle_voice',
-                title: isMuted ? '🔊 Activar voz' : '🔇 Silenciar voz'
+                title: isMuted ? 'Activar voz' : 'Silenciar voz'
             },
             {
                 action: 'open',
-                title: '📱 Abrir TARS'
+                title: 'Abrir TARS'
             }
         ],
         data: {
@@ -82,11 +89,11 @@ self.addEventListener('notificationclick', (event) => {
                             });
                         }
                         return self.registration.showNotification(
-                            muted ? '🔇 Voz del celular desactivada' : '🔊 Voz del celular activada',
+                            muted ? 'Voz del celular desactivada' : 'Voz del celular activada',
                             {
                                 body: muted
-                                    ? 'TARS no hablará en voz alta al llegar respuestas.'
-                                    : 'TARS volverá a leer las respuestas por voz.',
+                                    ? 'TARS no hablara en voz alta al llegar respuestas.'
+                                    : 'TARS volvera a leer las respuestas por voz.',
                                 icon: '/static/icon-192.png',
                                 badge: '/static/icon-192.png',
                                 tag: 'tars-voice-status',

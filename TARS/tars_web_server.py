@@ -1707,6 +1707,100 @@ async def handle_sync(request):
         "active_pc": get_active_pc_info()
     })
 
+
+def get_chat_history(convo_id, limit=10):
+    if not convo_id:
+        return {"chat_id": "", "messages": [], "last_step_index": 0}
+
+    brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
+    transcript_path = os.path.join(brain_dir, convo_id, ".system_generated", "logs", "transcript.jsonl")
+    if not os.path.exists(transcript_path):
+        return {"chat_id": convo_id, "messages": [], "last_step_index": 0}
+
+    lines = []
+    try:
+        with open(transcript_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            read_size = min(size, 2097152)  # Leer hasta los ultimos 2 MB
+            f.seek(size - read_size)
+            chunk = f.read(read_size).decode("utf-8", errors="ignore")
+            all_lines = chunk.splitlines()
+            if read_size < size and len(all_lines) > 1:
+                lines = all_lines[1:]
+            else:
+                lines = all_lines
+    except Exception as e:
+        print(f"[TARS Web] Error leyendo transcript para historial ({convo_id}): {e}")
+        return {"chat_id": convo_id, "messages": [], "last_step_index": 0}
+
+    turns = []
+    for line in lines:
+        try:
+            step = json.loads(line)
+            stype = step.get("type")
+            source = step.get("source")
+            content = step.get("content", "")
+
+            if stype == "USER_INPUT" and source == "USER_EXPLICIT":
+                match = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", content, re.DOTALL)
+                clean_text = match.group(1).strip() if match else content.strip()
+                if clean_text and not clean_text.startswith("{{ CHECKPOINT"):
+                    turns.append({
+                        "role": "user",
+                        "content": clean_text,
+                        "step_index": step.get("step_index", 0)
+                    })
+
+            elif stype == "PLANNER_RESPONSE" and source == "MODEL":
+                tool_calls = step.get("tool_calls", [])
+                if content and not tool_calls:
+                    media = collect_turn_media_and_files(content, {})
+                    turns.append({
+                        "role": "assistant",
+                        "content": content.strip(),
+                        "media": media,
+                        "step_index": step.get("step_index", 0)
+                    })
+        except Exception:
+            pass
+
+    recent = turns[-limit:] if len(turns) > limit else turns
+    last_idx = recent[-1]["step_index"] if recent else 0
+    return {
+        "chat_id": convo_id,
+        "messages": recent,
+        "last_step_index": last_idx
+    }
+
+
+async def handle_chat_history(request):
+    chat_id = request.query.get("chat_id", "").strip()
+    try:
+        limit = int(request.query.get("limit", 10))
+    except Exception:
+        limit = 10
+
+    if is_remote_pc_active():
+        import urllib.parse
+        rem_ip = get_active_pc_ip()
+        qs = f"/api/chat_history?chat_id={urllib.parse.quote(chat_id)}&limit={limit}"
+        rem_data = await asyncio.to_thread(remote_api_request, rem_ip, qs, "GET", None, 12.0)
+        if isinstance(rem_data, dict) and not rem_data.get("_proxy_error"):
+            for msg in rem_data.get("messages", []):
+                for m in (msg.get("media") or []):
+                    if isinstance(m, dict) and m.get("url") and m.get("url", "").startswith("/media/"):
+                        await asyncio.to_thread(ensure_remote_media_cached, rem_ip, m["url"])
+            return web.json_response(rem_data)
+
+    if not chat_id:
+        active_id = await asyncio.to_thread(get_current_antigravity_convo_id) or ""
+        chat_id = active_id
+
+    data = await asyncio.to_thread(get_chat_history, chat_id, limit)
+    return web.json_response(data)
+
+
 TARS_STATE_FILE = "/home/santiago/.gemini/config/tars_state.json"
 
 def _read_tars_state():
@@ -2086,6 +2180,10 @@ async def handle_switch_chat(request):
                 return web.json_response(rem_res)
 
         result = await asyncio.to_thread(switch_antigravity_chat, target)
+        if isinstance(result, dict) and result.get("success") and result.get("id"):
+            hist = await asyncio.to_thread(get_chat_history, result["id"], 10)
+            result["messages"] = hist.get("messages", [])
+            result["last_step_index"] = hist.get("last_step_index", 0)
         return web.json_response(result)
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
@@ -2422,6 +2520,7 @@ def init_app():
     app.router.add_post("/api/select_pc", handle_select_pc)
     app.router.add_post("/api/add_pc", handle_add_pc)
     app.router.add_get("/api/chats", handle_get_chats)
+    app.router.add_get("/api/chat_history", handle_chat_history)
     app.router.add_post("/api/switch_chat", handle_switch_chat)
     app.router.add_get("/api/models", handle_get_models)
     app.router.add_post("/api/switch_model", handle_switch_model)
