@@ -35,4 +35,9 @@ if systemctl --user list-unit-files | grep -q "tars-web.service"; then
     systemctl --user is-active tars-web.service
 fi
 
-echo "TARS actualizado y en linea."
+if systemctl --user list-unit-files | grep -q "tars-tunnel.service"; then
+    systemctl --user stop tars-tunnel.service 2>/dev/null || true
+    systemctl --user disable tars-tunnel.service 2>/dev/null || true
+fi
+
+echo "✅ ¡TARS actualizado y en línea!"

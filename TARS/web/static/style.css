@@ -1382,4 +1382,145 @@ body {
     to { transform: rotate(360deg); }
 }
 
+/* ===== MODAL DE BLOQUEO POR PIN DE SEGURIDAD ===== */
+.pin-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10, 12, 18, 0.92);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    animation: fadeIn 0.25s ease-out;
+}
+
+.pin-modal-overlay.hidden {
+    display: none !important;
+}
+
+.pin-card {
+    background: #141721;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 30px rgba(99, 102, 241, 0.15);
+    border-radius: 24px;
+    padding: 28px 24px;
+    width: 90%;
+    max-width: 320px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.pin-shield-icon {
+    color: #8b5cf6;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(139, 92, 246, 0.12);
+    width: 64px;
+    height: 64px;
+    border-radius: 50%;
+    border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+.pin-card h2 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #f1f5f9;
+    margin-bottom: 4px;
+}
+
+.pin-card p {
+    font-size: 0.85rem;
+    color: #94a3b8;
+    margin-bottom: 20px;
+}
+
+.pin-dots {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 16px;
+}
+
+.pin-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    background: transparent;
+    transition: all 0.18s ease;
+}
+
+.pin-dot.filled {
+    background: #8b5cf6;
+    border-color: #a78bfa;
+    box-shadow: 0 0 10px rgba(139, 92, 246, 0.6);
+    transform: scale(1.15);
+}
+
+.pin-error-msg {
+    font-size: 0.8rem;
+    color: #f87171;
+    margin-bottom: 14px;
+    min-height: 18px;
+    font-weight: 500;
+}
+
+.pin-card.shake {
+    animation: pinShake 0.4s ease-in-out;
+}
+
+@keyframes pinShake {
+    0%, 100% { transform: translateX(0); }
+    20%, 60% { transform: translateX(-8px); }
+    40%, 80% { transform: translateX(8px); }
+}
+
+.pin-keypad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    width: 100%;
+}
+
+.pin-key {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #f1f5f9;
+    font-size: 1.35rem;
+    font-weight: 600;
+    height: 54px;
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: all 0.12s ease;
+}
+
+.pin-key:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+.pin-key:active {
+    background: rgba(139, 92, 246, 0.25);
+    border-color: #8b5cf6;
+    transform: scale(0.92);
+}
+
+.pin-key-action {
+    font-size: 1.1rem;
+    color: #94a3b8;
+    background: rgba(255, 255, 255, 0.02);
+}
 

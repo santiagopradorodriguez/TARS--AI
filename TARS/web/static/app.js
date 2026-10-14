@@ -1,4 +1,162 @@
 
+// ===== SISTEMA DE AUTENTICACION Y PIN DE SEGURIDAD =====
+const _origFetch = window.fetch;
+window.fetch = async function(...args) {
+    let [resource, config] = args;
+    config = config || {};
+    config.headers = config.headers || {};
+    const storedPin = localStorage.getItem('tars_pin');
+    if (storedPin) {
+        if (config.headers instanceof Headers) {
+            config.headers.set('X-TARS-PIN', storedPin);
+        } else if (Array.isArray(config.headers)) {
+            config.headers.push(['X-TARS-PIN', storedPin]);
+        } else {
+            config.headers['X-TARS-PIN'] = storedPin;
+        }
+    }
+    const response = await _origFetch(resource, config);
+    if (response.status === 401) {
+        try {
+            const clone = response.clone();
+            const d = await clone.json();
+            if (d && d.auth_required) {
+                showPinModal();
+            }
+        } catch(e) {}
+    }
+    return response;
+};
+
+let currentPinBuffer = '';
+const pinModal = document.getElementById('pin-modal');
+const pinCard = document.querySelector('.pin-card');
+const pinDotsContainer = document.getElementById('pin-dots');
+const pinErrorMsg = document.getElementById('pin-error-msg');
+
+function showPinModal(errorText = '') {
+    if (!pinModal) return;
+    pinModal.classList.remove('hidden');
+    currentPinBuffer = '';
+    updatePinDots();
+    if (errorText) {
+        showPinError(errorText);
+    } else if (pinErrorMsg) {
+        pinErrorMsg.style.display = 'none';
+        pinErrorMsg.innerText = '';
+    }
+}
+
+function hidePinModal() {
+    if (pinModal) {
+        pinModal.classList.add('hidden');
+    }
+}
+
+function updatePinDots() {
+    if (!pinDotsContainer) return;
+    const dots = pinDotsContainer.querySelectorAll('.pin-dot');
+    dots.forEach((dot, idx) => {
+        if (idx < currentPinBuffer.length) {
+            dot.classList.add('filled');
+        } else {
+            dot.classList.remove('filled');
+        }
+    });
+}
+
+function showPinError(msg) {
+    if (pinErrorMsg) {
+        pinErrorMsg.innerText = msg;
+        pinErrorMsg.style.display = 'block';
+    }
+    if (pinCard) {
+        pinCard.classList.add('shake');
+        setTimeout(() => pinCard.classList.remove('shake'), 450);
+    }
+}
+
+async function submitPin() {
+    if (currentPinBuffer.length < 4) return;
+    try {
+        const resp = await _origFetch('/api/verify_pin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin: currentPinBuffer })
+        });
+        const data = await resp.json();
+        if (data && data.success) {
+            localStorage.setItem('tars_pin', currentPinBuffer);
+            hidePinModal();
+            if (typeof loadChatsList === 'function') loadChatsList();
+            if (typeof syncLoop === 'function') syncLoop();
+        } else {
+            showPinError(data.error || 'PIN incorrecto');
+            currentPinBuffer = '';
+            updatePinDots();
+        }
+    } catch (err) {
+        showPinError('Error de conexión al validar PIN');
+        currentPinBuffer = '';
+        updatePinDots();
+    }
+}
+
+function handlePinKey(val) {
+    if (val === 'clear') {
+        currentPinBuffer = '';
+        if (pinErrorMsg) pinErrorMsg.style.display = 'none';
+        updatePinDots();
+        return;
+    }
+    if (val === 'backspace') {
+        currentPinBuffer = currentPinBuffer.slice(0, -1);
+        if (pinErrorMsg) pinErrorMsg.style.display = 'none';
+        updatePinDots();
+        return;
+    }
+    if (/^[0-9]$/.test(val) && currentPinBuffer.length < 6) {
+        currentPinBuffer += val;
+        if (pinErrorMsg) pinErrorMsg.style.display = 'none';
+        updatePinDots();
+        if (currentPinBuffer.length === 4) {
+            submitPin();
+        }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.pin-key').forEach(keyBtn => {
+        keyBtn.addEventListener('click', () => {
+            const val = keyBtn.getAttribute('data-val') || keyBtn.getAttribute('data-action');
+            handlePinKey(val);
+        });
+    });
+
+    window.addEventListener('keydown', (e) => {
+        if (!pinModal || pinModal.classList.contains('hidden')) return;
+        if (/^[0-9]$/.test(e.key)) {
+            handlePinKey(e.key);
+        } else if (e.key === 'Backspace') {
+            handlePinKey('backspace');
+        } else if (e.key === 'Escape') {
+            handlePinKey('clear');
+        }
+    });
+
+    _origFetch('/api/auth_status', {
+        headers: { 'X-TARS-PIN': localStorage.getItem('tars_pin') || '' }
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data && !data.authenticated) {
+            showPinModal();
+        }
+    })
+    .catch(() => {});
+});
+// ========================================================
+
 function updateProcessingBubble(info) {
     let bubble = document.getElementById('processing-bubble');
     if (!bubble) {

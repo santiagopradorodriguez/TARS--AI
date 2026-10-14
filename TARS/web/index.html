@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0f1117">
     <title>TARS Movil</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/style.css?v=4.5">
+    <link rel="stylesheet" href="/static/style.css?v=5.0">
 </head>
 <body>
     <div class="app-container">
@@ -232,6 +232,43 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=4.5"></script>
+    <!-- Modal de Bloqueo por PIN de Seguridad -->
+    <div id="pin-modal" class="pin-modal-overlay hidden">
+        <div class="pin-card">
+            <div class="pin-shield-icon">
+                <svg viewBox="0 0 24 24" width="40" height="40" fill="currentColor">
+                    <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/>
+                </svg>
+            </div>
+            <h2>TARS Seguro</h2>
+            <p id="pin-instruction">Ingresá tu PIN de seguridad</p>
+
+            <div class="pin-dots" id="pin-dots">
+                <span class="pin-dot"></span>
+                <span class="pin-dot"></span>
+                <span class="pin-dot"></span>
+                <span class="pin-dot"></span>
+            </div>
+
+            <div id="pin-error-msg" class="pin-error-msg" style="display: none;"></div>
+
+            <div class="pin-keypad">
+                <button type="button" class="pin-key" data-val="1">1</button>
+                <button type="button" class="pin-key" data-val="2">2</button>
+                <button type="button" class="pin-key" data-val="3">3</button>
+                <button type="button" class="pin-key" data-val="4">4</button>
+                <button type="button" class="pin-key" data-val="5">5</button>
+                <button type="button" class="pin-key" data-val="6">6</button>
+                <button type="button" class="pin-key" data-val="7">7</button>
+                <button type="button" class="pin-key" data-val="8">8</button>
+                <button type="button" class="pin-key" data-val="9">9</button>
+                <button type="button" class="pin-key pin-key-action" data-action="clear" title="Borrar todo">C</button>
+                <button type="button" class="pin-key" data-val="0">0</button>
+                <button type="button" class="pin-key pin-key-action" data-action="backspace" title="Borrar último dígito">⌫</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v=5.0"></script>
 </body>
 </html>

@@ -1823,6 +1823,44 @@ def _write_tars_state(updates):
         print(f"[TARS Web] Error guardando estado TARS: {e}")
         return False
 
+def get_security_pin():
+    st = _read_tars_state()
+    pin = st.get("security_pin")
+    if not pin:
+        pin = "1234"
+        _write_tars_state({"security_pin": pin})
+    return str(pin).strip()
+
+def verify_security_pin(candidate):
+    expected = get_security_pin()
+    if not expected:
+        return True
+    return str(candidate or "").strip() == expected
+
+@web.middleware
+async def auth_middleware(request, handler):
+    path = request.path
+    # Rutas públicas sin autenticación (HTML inicial, assets estáticos, service worker, manifest, verificación de PIN)
+    if (
+        path in ("/", "/manifest.json", "/sw.js", "/api/verify_pin", "/api/auth_status")
+        or path.startswith("/static/")
+    ):
+        return await handler(request)
+
+    user_pin = (
+        request.headers.get("X-TARS-PIN")
+        or request.query.get("pin")
+        or request.cookies.get("tars_pin")
+        or ""
+    )
+    if not verify_security_pin(user_pin):
+        return web.json_response({
+            "error": "Acceso restringido. Se requiere PIN de seguridad.",
+            "auth_required": True
+        }, status=401)
+
+    return await handler(request)
+
 def format_friendly_pc_name(hostname, ip=""):
     h = (hostname or "").strip()
     hl = h.lower()
@@ -2508,11 +2546,55 @@ async def handle_cancel(request):
     res = await asyncio.to_thread(cancel_antigravity_ide)
     return web.json_response(res)
 
+async def handle_auth_status(request):
+    user_pin = (
+        request.headers.get("X-TARS-PIN")
+        or request.query.get("pin")
+        or request.cookies.get("tars_pin")
+        or ""
+    )
+    is_valid = verify_security_pin(user_pin)
+    return web.json_response({
+        "auth_required": True,
+        "authenticated": is_valid
+    })
+
+async def handle_verify_pin(request):
+    try:
+        data = await request.json()
+        candidate = data.get("pin", "")
+        if verify_security_pin(candidate):
+            resp = web.json_response({"success": True, "authenticated": True})
+            resp.set_cookie("tars_pin", str(candidate).strip(), max_age=365*24*3600, samesite="Lax", secure=False)
+            return resp
+        return web.json_response({"success": False, "error": "PIN incorrecto. Intentá nuevamente."}, status=401)
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+async def handle_change_pin(request):
+    try:
+        data = await request.json()
+        current_pin = data.get("current_pin", "")
+        new_pin = str(data.get("new_pin", "")).strip()
+        if not verify_security_pin(current_pin):
+            return web.json_response({"success": False, "error": "El PIN actual es incorrecto."}, status=401)
+        if len(new_pin) < 4:
+            return web.json_response({"success": False, "error": "El nuevo PIN debe tener al menos 4 dígitos."}, status=400)
+        _write_tars_state({"security_pin": new_pin})
+        resp = web.json_response({"success": True, "message": "PIN actualizado exitosamente."})
+        resp.set_cookie("tars_pin", new_pin, max_age=365*24*3600, samesite="Lax", secure=False)
+        return resp
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
 def init_app():
-    app = web.Application()
+    app = web.Application(middlewares=[auth_middleware])
     app.router.add_get("/", handle_index)
     app.router.add_get("/sw.js", handle_sw)
     app.router.add_get("/manifest.json", handle_manifest)
+    app.router.add_get("/api/auth_status", handle_auth_status)
+    app.router.add_post("/api/verify_pin", handle_verify_pin)
+    app.router.add_post("/api/change_pin", handle_change_pin)
     app.router.add_get("/api/tunnel_url", handle_tunnel_url)
     app.router.add_get("/api/vapid_public_key", handle_vapid_public_key)
     app.router.add_post("/api/push_subscribe", handle_push_subscribe)
