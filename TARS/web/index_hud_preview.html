@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0a0a0c">
+    <title>TARS // CONSOLA TACTICA HUD</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/static/style.css?v=5.0">
+</head>
+<body class="hud-body">
+    <div class="hud-app-wrapper">
+        <!-- HEADER TACTICO -->
+        <header class="hud-header">
+            <div class="hud-header-top">
+                <div class="hud-brand">
+                    <span class="hud-glitch-text">TARS</span>
+                    <span class="hud-badge-sm">TACTICAL HUD</span>
+                </div>
+                <div class="hud-header-actions">
+                    <button id="pwa-install-btn" class="hud-btn-icon" title="Instalar App">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+                    </button>
+                    <button id="notify-toggle-btn" class="hud-btn-icon" title="Notificaciones Push">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+                        <span id="notify-btn-label">OFF</span>
+                    </button>
+                    <button id="mobile-voice-toggle-btn" class="hud-btn-icon" title="Voz en Terminal Movil">
+                        <svg id="mobile-voice-on-icon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>
+                        <svg id="mobile-voice-off-icon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="display:none;"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+                        <span id="mobile-voice-label">VOZ</span>
+                    </button>
+                    <button id="pc-sound-toggle-btn" class="hud-btn-icon" title="Silenciar Audio de PC">
+                        <svg id="pc-sound-on-icon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/></svg>
+                        <svg id="pc-sound-off-icon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="display:none;"><path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6zm7 2h2v4h-2zm0 6h2v2h-2z"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <!-- NUCLEO OSCILOSCOPIO -->
+            <div class="hud-core-container">
+                <canvas id="tars-core-canvas" width="220" height="42"></canvas>
+                <div class="core-readout-wrap">
+                    <span id="hud-status-dot" class="status-indicator online"></span>
+                    <span id="core-state-readout">STATE // STANDBY</span>
+                </div>
+            </div>
+
+            <!-- SELECTORES TACTICOS: NODO, CHAT, MODELO -->
+            <div class="hud-selectors-bar">
+                <button id="pc-selector-btn" class="hud-selector-pill">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/></svg>
+                    <span id="current-pc-title">Pop!_OS</span>
+                </button>
+                <button id="chat-selector-btn" class="hud-selector-pill">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+                    <span id="current-chat-title">Sesion Activa</span>
+                </button>
+                <button id="model-selector-btn" class="hud-selector-pill">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><circle cx="12" cy="12" r="3"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>
+                    <span id="current-model-title">MODELO IA</span>
+                </button>
+            </div>
+
+            <!-- BARRA DE REPRODUCCION DE VOZ -->
+            <div id="audio-control-bar" class="hud-audio-bar hidden">
+                <span id="audio-status-text">SINTESIS VOCAL ACTIVA</span>
+                <div class="hud-audio-btns">
+                    <button id="audio-pause-btn" class="hud-btn-xs">
+                        <span id="pause-icon">PAUSAR</span>
+                        <span id="play-icon" style="display:none;">REANUDAR</span>
+                    </button>
+                    <button id="audio-stop-btn" class="hud-btn-xs hud-danger">DETENER</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- BANNER TOAST ESTILO WHATSAPP -->
+        <div id="wa-toast-banner" class="hud-toast-banner hidden">
+            <div class="hud-toast-content">
+                <span id="wa-toast-title" class="hud-toast-title">TRANSMISION // TARS</span>
+                <span id="wa-toast-text" class="hud-toast-text">Sistemas en linea</span>
+            </div>
+        </div>
+
+        <!-- ============================================================= -->
+        <!-- VISTA 1: ASISTENTE & CHAT -->
+        <!-- ============================================================= -->
+        <section id="view-chat" class="hud-module-view active">
+            <div id="chat-container" class="hud-chat-box">
+                <!-- Mensajes inyectados dinamicamente -->
+            </div>
+
+            <div id="attachment-preview-bar" class="hud-attachments-bar hidden"></div>
+
+            <input type="file" id="file-input" multiple hidden>
+            <input type="file" id="camera-input" accept="image/*" capture="environment" hidden>
+
+            <div class="hud-chat-input-row">
+                <button id="attach-btn" class="hud-input-icon-btn" title="Adjuntar Archivo">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+                </button>
+                <button id="camera-btn" class="hud-input-icon-btn hud-cam-btn" title="Camara Tactica Directa">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                </button>
+                <input type="text" id="text-input" placeholder="Transmitir comando a TARS..." autocomplete="off">
+                <button id="send-btn" class="hud-send-btn">
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                </button>
+            </div>
+
+            <div class="hud-voice-row">
+                <button id="cancel-proc-btn" class="hud-abort-btn">
+                    <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><rect x="5" y="5" width="14" height="14"/></svg>
+                    <span id="cancel-proc-label">ABORTAR</span>
+                </button>
+                <button id="mic-btn" class="hud-mic-central">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+                </button>
+                <span id="mic-status-label" class="hud-mic-status">CANAL DE AUDIO EN ESPERA</span>
+            </div>
+        </section>
+
+        <!-- ============================================================= -->
+        <!-- VISTA 2: DOMOTICA & LUCES TUYA -->
+        <!-- ============================================================= -->
+        <section id="view-tuya" class="hud-module-view">
+            <div class="hud-panel-card">
+                <div class="hud-card-header">
+                    <span class="hud-card-title">ENLACE DOMOTICO TUYA // PUERTO 8080</span>
+                    <span id="tuya-conn-badge" class="hud-badge-status">OFFLINE</span>
+                </div>
+                <div class="hud-form-row">
+                    <input type="text" id="tuya-endpoint-input" placeholder="http://127.0.0.1:8080">
+                    <button id="tuya-save-host-btn" class="hud-btn-action">FIJAR HOST</button>
+                </div>
+            </div>
+
+            <div class="hud-panel-card">
+                <div class="hud-card-header">
+                    <span class="hud-card-title">ALIMENTACION PRINCIPAL</span>
+                </div>
+                <div class="hud-btn-grid-2">
+                    <button id="tuya-power-on-btn" class="hud-power-btn on">ENCENDER LUZ</button>
+                    <button id="tuya-power-off-btn" class="hud-power-btn off">APAGAR LUZ</button>
+                </div>
+            </div>
+
+            <div class="hud-panel-card">
+                <div class="hud-card-header">
+                    <span class="hud-card-title">INTENSIDAD DE BRILLO</span>
+                    <span id="tuya-brightness-val" class="hud-val-readout">50%</span>
+                </div>
+                <input type="range" id="tuya-brightness-slider" min="1" max="100" value="50" class="hud-slider">
+            </div>
+
+            <div class="hud-panel-card">
+                <div class="hud-card-header">
+                    <span class="hud-card-title">ESPECTRO DE COLOR</span>
+                    <span id="tuya-color-hex" class="hud-val-readout">#FFFFFF</span>
+                </div>
+                <div class="hud-color-row">
+                    <input type="color" id="tuya-color-picker" value="#ffffff" class="hud-color-input">
+                    <button id="tuya-apply-color-btn" class="hud-btn-action">APLICAR COLOR</button>
+                </div>
+                <div class="hud-swatches-grid">
+                    <button class="swatch-btn" data-hex="#ffffff" style="background:#ffffff;"></button>
+                    <button class="swatch-btn" data-hex="#ffddaa" style="background:#ffddaa;"></button>
+                    <button class="swatch-btn" data-hex="#00e5ff" style="background:#00e5ff;"></button>
+                    <button class="swatch-btn" data-hex="#26a269" style="background:#26a269;"></button>
+                    <button class="swatch-btn" data-hex="#e5a93c" style="background:#e5a93c;"></button>
+                    <button class="swatch-btn" data-hex="#ff3b30" style="background:#ff3b30;"></button>
+                </div>
+            </div>
+
+            <div class="hud-panel-card">
+                <div class="hud-card-header">
+                    <span class="hud-card-title">PERFILES TACTICOS PRECONFIGURADOS</span>
+                </div>
+                <div class="hud-presets-grid">
+                    <div class="tuya-preset-card active" data-color="#ffffff" data-brightness="100" data-name="Laboratorio">
+                        <span class="preset-name">LABORATORIO</span>
+                        <span class="preset-sub">Blanco Puro // 100%</span>
+                    </div>
+                    <div class="tuya-preset-card" data-color="#e5a93c" data-brightness="80" data-name="Concentracion">
+                        <span class="preset-name">CONCENTRACION</span>
+                        <span class="preset-sub">Ambar // 80%</span>
+                    </div>
+                    <div class="tuya-preset-card" data-color="#ffddaa" data-brightness="50" data-name="Lectura">
+                        <span class="preset-name">LECTURA</span>
+                        <span class="preset-sub">Calido // 50%</span>
+                    </div>
+                    <div class="tuya-preset-card" data-color="#ff3b30" data-brightness="15" data-name="Noche">
+                        <span class="preset-name">NOCHE</span>
+                        <span class="preset-sub">Rojo Tenue // 15%</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="hud-panel-card">
+                <div class="hud-card-header">
+                    <span class="hud-card-title">TELEMETRIA DOMOTICA // EVENT LOG</span>
+                </div>
+                <div id="tuya-telemetry-log" class="hud-log-box"></div>
+            </div>
+        </section>
+
+        <!-- ============================================================= -->
+        <!-- VISTA 3: AGENDA, TIMERS & CRON -->
+        <!-- ============================================================= -->
+        <section id="view-agenda" class="hud-module-view">
+            <div class="hud-panel-card">
+                <div class="hud-card-header">
+                    <span class="hud-card-title">CUENTAS REGRESIVAS TACTICAS</span>
+                    <span id="active-timers-count" class="hud-badge-status">0 ACTIVOS</span>
+                </div>
+                <div class="hud-form-col">
+                    <input type="text" id="timer-label-input" placeholder="Etiqueta del proceso (ej. Secado sEMG)...">
+                    <div class="hud-form-row">
+                        <input type="number" id="timer-minutes-input" value="15" min="1" max="1440" placeholder="Minutos">
+                        <button id="add-timer-btn" class="hud-btn-action">CREAR TIMER</button>
+                    </div>
+                    <button id="send-agent-reminder-btn" class="hud-btn-subtle">DELEGAR ALARMA A TARS AI</button>
+                </div>
+                <div id="timers-list-container" class="hud-list-wrap"></div>
+            </div>
+
+            <div class="hud-panel-card">
+                <div class="hud-card-header">
+                    <span class="hud-card-title">TAREAS PROGRAMADAS LINUX // CRON</span>
+                </div>
+                <div class="hud-form-col">
+                    <input type="text" id="cron-expr-input" placeholder="Expresion (ej. 0 */4 * * *)">
+                    <input type="text" id="cron-cmd-input" placeholder="Script o comando bash...">
+                    <div class="hud-btn-grid-2">
+                        <button id="add-cron-btn" class="hud-btn-action">AGREGAR CRON</button>
+                        <button id="sync-cron-btn" class="hud-btn-subtle">LISTAR CRONTAB</button>
+                    </div>
+                </div>
+                <div id="cron-list-container" class="hud-list-wrap"></div>
+            </div>
+        </section>
+
+        <!-- ============================================================= -->
+        <!-- VISTA 4: TELEMETRIA & NODOS MULTI-PC -->
+        <!-- ============================================================= -->
+        <section id="view-telemetry" class="hud-module-view">
+            <div class="hud-metrics-grid">
+                <div class="hud-metric-card">
+                    <span class="metric-label">NODO ACTIVO</span>
+                    <span id="telemetry-node-val" class="metric-val">POP!_OS</span>
+                </div>
+                <div class="hud-metric-card">
+                    <span class="metric-label">RTT LATENCIA</span>
+                    <span id="telemetry-latency-val" class="metric-val">0 ms</span>
+                </div>
+                <div class="hud-metric-card">
+                    <span class="metric-label">PASO SYNC</span>
+                    <span id="telemetry-step-val" class="metric-val">0</span>
+                </div>
+                <div class="hud-metric-card">
+                    <span class="metric-label">SALIDA AUDIO PC</span>
+                    <span id="telemetry-audio-val" class="metric-val">ACTIVO</span>
+                </div>
+            </div>
+
+            <div class="hud-panel-card">
+                <div class="hud-card-header">
+                    <span class="hud-card-title">HISTORIAL DE LATENCIA EN TIEMPO REAL</span>
+                    <span id="telemetry-sync-badge" class="hud-badge-status online">SYNC OK</span>
+                </div>
+                <div id="latency-bars-wrapper" class="hud-latency-bars"></div>
+                <button id="telemetry-mute-pc-btn" class="hud-btn-action hud-danger" style="margin-top:12px;">CONMUTAR MUTE DE AUDIO PC</button>
+            </div>
+
+            <div class="hud-panel-card">
+                <div class="hud-card-header">
+                    <span class="hud-card-title">NODOS EN RED TAILSCALE // MULTI-PC</span>
+                    <button id="telemetry-refresh-pcs-btn" class="hud-btn-xs">SONDEAR</button>
+                </div>
+                <div id="telemetry-pcs-list" class="hud-list-wrap"></div>
+
+                <div class="hud-card-subhead">VINCULAR NODO MANUALMENTE</div>
+                <div class="hud-form-row">
+                    <input type="text" id="telemetry-pc-name" placeholder="Nombre (ej. Lenovo)">
+                    <input type="text" id="telemetry-pc-ip" placeholder="IP (ej. 100.x.x.x)">
+                    <button id="telemetry-add-pc-btn" class="hud-btn-action">ENLAZAR</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================= -->
+        <!-- DOCK TACTICO INFERIOR -->
+        <!-- ============================================================= -->
+        <nav class="hud-dock">
+            <button class="dock-tab active" data-target="view-chat">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>
+                <span>CHAT</span>
+            </button>
+            <button class="dock-tab" data-target="view-tuya">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M9 21c0 .55.45 1 1 1h4c.55 0 1-.45 1-1v-1H9v1zm3-19C8.14 2 5 5.14 5 9c0 2.38 1.19 4.47 3 5.74V17c0 .55.45 1 1 1h6c.55 0 1-.45 1-1v-2.26c1.81-1.27 3-3.36 3-5.74 0-3.86-3.14-7-7-7z"/></svg>
+                <span>LUCES</span>
+            </button>
+            <button class="dock-tab" data-target="view-agenda">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>
+                <span>AGENDA</span>
+            </button>
+            <button class="dock-tab" data-target="view-telemetry">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+                <span>NODOS</span>
+            </button>
+        </nav>
+
+        <!-- ============================================================= -->
+        <!-- MODALES DE CONTROL (CHATS, MODELOS, PCS) -->
+        <!-- ============================================================= -->
+        <div id="chats-modal" class="hud-modal hidden">
+            <div id="chats-modal-overlay" class="hud-modal-overlay"></div>
+            <div class="hud-modal-content">
+                <div class="hud-modal-header">
+                    <span>SESIONES ANTIGRAVITY</span>
+                    <button id="chats-modal-close" class="hud-btn-xs">&times;</button>
+                </div>
+                <div class="hud-modal-actions-row">
+                    <button id="prev-chat-btn" class="hud-btn-subtle">ANTERIOR</button>
+                    <button id="next-chat-btn" class="hud-btn-subtle">SIGUIENTE</button>
+                </div>
+                <div id="chats-list" class="hud-modal-list"></div>
+            </div>
+        </div>
+
+        <div id="models-modal" class="hud-modal hidden">
+            <div id="models-modal-overlay" class="hud-modal-overlay"></div>
+            <div class="hud-modal-content">
+                <div class="hud-modal-header">
+                    <span>MOTORES DE INFERENCIA IA</span>
+                    <button id="models-modal-close" class="hud-btn-xs">&times;</button>
+                </div>
+                <div id="models-list" class="hud-modal-list"></div>
+            </div>
+        </div>
+
+        <div id="pcs-modal" class="hud-modal hidden">
+            <div id="pcs-modal-overlay" class="hud-modal-overlay"></div>
+            <div class="hud-modal-content">
+                <div class="hud-modal-header">
+                    <span>CONMUTAR NODO DE RED</span>
+                    <button id="pcs-modal-close" class="hud-btn-xs">&times;</button>
+                </div>
+                <div id="pcs-list" class="hud-modal-list"></div>
+                <div class="hud-card-subhead" style="margin-top:12px;">AGREGAR NODO TAILSCALE</div>
+                <div class="hud-form-row">
+                    <input type="text" id="custom-pc-name" placeholder="Nombre (ej. Lenovo)">
+                    <input type="text" id="custom-pc-ip" placeholder="IP (ej. 100.x.x.x)">
+                    <button id="add-custom-pc-btn" class="hud-btn-action">CONECTAR</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SCRIPT TACTICO DE LA APLICACION -->
+    <script src="/static/app.js?v=5.0"></script>
+</body>
+</html>
