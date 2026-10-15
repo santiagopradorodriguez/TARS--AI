@@ -685,7 +685,8 @@ async function sendAudioBlob(blob) {
         }
 
         if (data.cancelled) {
-            micStatusLabel.innerText = '🛑 Envío cancelado';
+            micStatusLabel.innerText = 'Envío cancelado.';
+            if (typeof scheduleWakeWordRestart === 'function') scheduleWakeWordRestart(1000);
             return;
         }
 
@@ -694,19 +695,22 @@ async function sendAudioBlob(blob) {
             micStatusLabel.innerText = 'Antigravity procesando en PC...';
         } else if (data.reply) {
             appendMessage('assistant', data.reply, data.media, data.audio_url);
-            micStatusLabel.innerText = 'Toca para hablar';
+            micStatusLabel.innerText = (typeof isWakeWordActive !== 'undefined' && isWakeWordActive) ? 'Di "Hola TARS" o toca para hablar' : 'Toca para hablar';
             if (cancelProcBtn) cancelProcBtn.classList.remove('active-danger');
         }
+        if (typeof scheduleWakeWordRestart === 'function') scheduleWakeWordRestart(1000);
     } catch (err) {
         activeFetchController = null;
+        if (typeof scheduleWakeWordRestart === 'function') scheduleWakeWordRestart(1000);
         if (err && err.name === 'AbortError') return;
         appendMessage('assistant', 'Error al procesar el audio en la PC.');
-        micStatusLabel.innerText = 'Toca para hablar';
+        micStatusLabel.innerText = (typeof isWakeWordActive !== 'undefined' && isWakeWordActive) ? 'Di "Hola TARS" o toca para hablar' : 'Toca para hablar';
     }
 }
 
 async function startRecording() {
     if (isRecording) return;
+    if (typeof stopWakeWordListening === 'function') stopWakeWordListening();
     if (navigator.vibrate) navigator.vibrate(35);
     try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -725,11 +729,14 @@ async function startRecording() {
             if (recordingCancelled) {
                 audioChunks = [];
                 recordingCancelled = false;
+                if (typeof scheduleWakeWordRestart === 'function') scheduleWakeWordRestart(1000);
                 return;
             }
             const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
             if (audioChunks.length > 0) {
                 sendAudioBlob(audioBlob);
+            } else {
+                if (typeof scheduleWakeWordRestart === 'function') scheduleWakeWordRestart(1000);
             }
         };
 
@@ -741,6 +748,7 @@ async function startRecording() {
         if (cancelProcLabel) cancelProcLabel.innerText = 'Cancelar';
         micStatusLabel.innerText = 'Escuchando... Toca mic para enviar o Cancelar';
     } catch (err) {
+        if (typeof scheduleWakeWordRestart === 'function') scheduleWakeWordRestart(1500);
         alert('No se pudo acceder al microfono. Asegurate de dar permisos HTTPS en el navegador.');
     }
 }
@@ -821,6 +829,175 @@ if (mobileVoiceToggleBtn) {
             });
         } catch (e) {}
     });
+}
+
+// =========================================================================
+// ESCUCHA MANOS LIBRES EN CELULAR: "HOLA TARS" (WAKE WORD MOVIL)
+// =========================================================================
+const wakeWordToggleBtn = document.getElementById('wake-word-toggle-btn');
+const wakeWordBtnLabel = document.getElementById('wake-word-btn-label');
+let isWakeWordActive = localStorage.getItem('tars_wake_word_active') === 'true';
+
+const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
+let wakeRecognizer = null;
+let wakeRestartTimer = null;
+let isRecognizingWakeWord = false;
+
+function playWakeWordChime() {
+    try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        const ctx = new AudioContextClass();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(880.0, ctx.currentTime + 0.12);
+        gain.gain.setValueAtTime(0.25, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.25);
+    } catch (e) {
+        console.log('[TARS WakeWord] Error generando tono:', e);
+    }
+}
+
+function updateWakeWordUI(active) {
+    isWakeWordActive = Boolean(active);
+    localStorage.setItem('tars_wake_word_active', isWakeWordActive ? 'true' : 'false');
+    if (!wakeWordToggleBtn) return;
+    if (isWakeWordActive) {
+        wakeWordToggleBtn.classList.add('active-wake-word');
+        wakeWordToggleBtn.title = 'Escucha Hola TARS activa en celular - Toca para apagar';
+        if (wakeWordBtnLabel) wakeWordBtnLabel.innerText = 'ON';
+        if (!isRecording && micStatusLabel) {
+            micStatusLabel.innerText = 'Di "Hola TARS" o toca para hablar';
+        }
+    } else {
+        wakeWordToggleBtn.classList.remove('active-wake-word');
+        wakeWordToggleBtn.title = 'Activar escucha manos libres Hola TARS en el celular';
+        if (wakeWordBtnLabel) wakeWordBtnLabel.innerText = 'TARS';
+        if (!isRecording && micStatusLabel) {
+            micStatusLabel.innerText = 'Toca para hablar';
+        }
+    }
+}
+
+function startWakeWordListening() {
+    if (!SpeechRecognitionClass) return;
+    if (!isWakeWordActive || isRecording || isRecognizingWakeWord) return;
+
+    try {
+        if (!wakeRecognizer) {
+            wakeRecognizer = new SpeechRecognitionClass();
+            wakeRecognizer.continuous = true;
+            wakeRecognizer.interimResults = true;
+            wakeRecognizer.lang = 'es-AR';
+            wakeRecognizer.maxAlternatives = 1;
+
+            wakeRecognizer.onresult = (event) => {
+                if (!isWakeWordActive || isRecording) return;
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    const res = event.results[i];
+                    const transcript = res[0].transcript.trim().toLowerCase();
+
+                    // Detectar "hola tars" o variantes comunes ("hola tax", "hola tar", "tars", "che tars", "oye tars")
+                    const match = transcript.match(/\b(?:hola\s+|che\s+|oye\s+|ey\s+)?(?:tars|tax|tar|tor|star|task)\b(.*)/i);
+                    if (match) {
+                        console.log('[TARS WakeWord] Trigger detectado:', transcript);
+                        if (navigator.vibrate) navigator.vibrate([60, 50, 100]);
+                        playWakeWordChime();
+
+                        stopWakeWordListening();
+
+                        const command = (match[1] || '').trim();
+                        if (command && command.length > 3) {
+                            if (micStatusLabel) micStatusLabel.innerText = 'Comando: ' + command;
+                            sendTextMessage(command);
+                        } else {
+                            if (micStatusLabel) micStatusLabel.innerText = 'Hola TARS detectado // Grabando...';
+                            startRecording();
+                        }
+                        break;
+                    }
+                }
+            };
+
+            wakeRecognizer.onerror = (event) => {
+                isRecognizingWakeWord = false;
+                if (event.error !== 'aborted' && event.error !== 'not-allowed') {
+                    scheduleWakeWordRestart(1200);
+                }
+            };
+
+            wakeRecognizer.onend = () => {
+                isRecognizingWakeWord = false;
+                if (isWakeWordActive && !isRecording) {
+                    scheduleWakeWordRestart(500);
+                }
+            };
+        }
+
+        wakeRecognizer.start();
+        isRecognizingWakeWord = true;
+    } catch (e) {
+        isRecognizingWakeWord = false;
+        scheduleWakeWordRestart(2000);
+    }
+}
+
+function stopWakeWordListening() {
+    if (wakeRestartTimer) {
+        clearTimeout(wakeRestartTimer);
+        wakeRestartTimer = null;
+    }
+    if (wakeRecognizer && isRecognizingWakeWord) {
+        try {
+            wakeRecognizer.stop();
+        } catch (e) {}
+    }
+    isRecognizingWakeWord = false;
+}
+
+function scheduleWakeWordRestart(delayMs) {
+    if (wakeRestartTimer) clearTimeout(wakeRestartTimer);
+    if (!isWakeWordActive || isRecording) return;
+    wakeRestartTimer = setTimeout(() => {
+        startWakeWordListening();
+    }, delayMs || 600);
+}
+
+updateWakeWordUI(isWakeWordActive);
+
+if (wakeWordToggleBtn) {
+    wakeWordToggleBtn.addEventListener('click', () => {
+        if (!SpeechRecognitionClass) {
+            alert('Tu navegador en este dispositivo no soporta Web Speech API para escucha continua.');
+            return;
+        }
+        if (navigator.vibrate) navigator.vibrate(40);
+        const nextState = !isWakeWordActive;
+        updateWakeWordUI(nextState);
+        if (nextState) {
+            startWakeWordListening();
+            showWhatsAppToast('Escucha manos libres activa', 'Di "Hola TARS" en cualquier momento para hablar.');
+        } else {
+            stopWakeWordListening();
+            showWhatsAppToast('Escucha manos libres apagada', 'Usa el boton de microfono para hablar.');
+        }
+    });
+}
+
+if (isWakeWordActive) {
+    const startWakeOnTouch = () => {
+        startWakeWordListening();
+        window.removeEventListener('click', startWakeOnTouch);
+        window.removeEventListener('touchstart', startWakeOnTouch);
+    };
+    window.addEventListener('click', startWakeOnTouch, { once: true });
+    window.addEventListener('touchstart', startWakeOnTouch, { once: true });
 }
 
 if ('serviceWorker' in navigator) {

@@ -365,31 +365,37 @@ def query_antigravity(prompt_text):
         return f"No pude conectar con el cerebro de Antigravity: {e}"
 
 
-def get_devtools_ws_url():
+def get_all_devtools_page_targets():
     port_file = os.path.expanduser("~/.config/Antigravity/DevToolsActivePort")
     if not os.path.exists(port_file):
-        return None
+        return []
     try:
         with open(port_file, "r") as f:
             port = f.readline().strip()
         req = urllib.request.Request(f"http://127.0.0.1:{port}/json/list")
         with urllib.request.urlopen(req, timeout=1.5) as resp:
             targets = json.loads(resp.read().decode())
-            page_targets = [t for t in targets if t.get("type") == "page"]
-            for t in page_targets:
-                url = t.get("url", "")
-                title = t.get("title", "")
-                if "127.0.0.1" in url or "localhost" in url or "/c/" in url or "antigravity" in url.lower() or "Antigravity" in title:
-                    return t.get("webSocketDebuggerUrl")
-            if page_targets:
-                return page_targets[0].get("webSocketDebuggerUrl")
+            return [t for t in targets if t.get("type") == "page"]
     except Exception as e:
-        print(f"[TARS Web] Error obteniendo DevTools WS: {e}")
+        print(f"[TARS Web] Error obteniendo DevTools targets: {e}")
+    return []
+
+
+def get_devtools_ws_url():
+    targets = get_all_devtools_page_targets()
+    for t in targets:
+        url = t.get("url", "")
+        title = t.get("title", "")
+        if "127.0.0.1" in url or "localhost" in url or "/c/" in url or "antigravity" in url.lower() or "Antigravity" in title:
+            return t.get("webSocketDebuggerUrl")
+    if targets:
+        return targets[0].get("webSocketDebuggerUrl")
     return None
 
 
-def eval_in_antigravity(js_expr):
-    ws_url = get_devtools_ws_url()
+def eval_in_antigravity(js_expr, ws_url=None):
+    if not ws_url:
+        ws_url = get_devtools_ws_url()
     if not ws_url:
         return None
     try:
@@ -421,15 +427,37 @@ def get_current_antigravity_convo_id():
     return None
 
 
+def clean_chat_title(raw_title):
+    if not raw_title:
+        return ""
+    # Quitar emojis
+    title = re.sub(r'[\U00010000-\U0010ffff\u2600-\u27bf\u2300-\u23ff\u2b50]', '', raw_title)
+    # Quitar palabras de control de interfaz
+    title = re.sub(r'\b(Delete|Archive|Rename|Pin|Active|Cerrar|Eliminar)\b', '', title, flags=re.IGNORECASE)
+    # Reemplazar parentesis por guiones para cumplir con la regla del proyecto
+    title = title.replace('(', ' - ').replace(')', '')
+    # Normalizar espacios y guiones sueltos
+    title = re.sub(r'\s+-\s*$', '', title)
+    title = re.sub(r'^\s*-\s*', '', title)
+    title = re.sub(r'-\s*-+', '-', title)
+    title = re.sub(r'\s+', ' ', title).strip()
+    return title[:50].strip()
+
+
 def get_chats_from_disk():
-    """Fallback: busca conversaciones guardadas en ~/.gemini/antigravity/brain que pertenezcan al proyecto activo y no sean subagentes."""
+    """Busca conversaciones de usuario en ~/.gemini/antigravity/brain excluyendo subagentes y tareas tecnicas."""
     brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
     if not os.path.exists(brain_dir):
         return []
 
     chats = []
-    # Carpetas o proyectos prohibidos (otros proyectos del usuario)
-    forbidden_keywords = ["teorica", "teo2", "fisica", "msi-fan-control", "cuantica"]
+    subagent_patterns = [
+        "you are a ", "you are an ", "you are the ", "worker subagent",
+        "tu misión como", "tu mision como", "resume work at",
+        "audita todos los archivos", "audita las dependencias",
+        "escribe la documentacion", "teamwork_preview",
+        "sentinel", "initialize your state"
+    ]
 
     try:
         entries = []
@@ -439,31 +467,33 @@ def get_chats_from_disk():
             transcript_path = os.path.join(brain_dir, convo_id, ".system_generated", "logs", "transcript.jsonl")
             if not os.path.exists(transcript_path):
                 continue
-            mtime = os.path.getmtime(transcript_path)
-            entries.append((mtime, convo_id, transcript_path))
+            try:
+                mtime = os.path.getmtime(transcript_path)
+                entries.append((mtime, convo_id, transcript_path))
+            except Exception:
+                continue
 
-        # Ordenar por fecha de modificacion mas reciente
+        # Ordenar por modificacion mas reciente
         entries.sort(key=lambda x: x[0], reverse=True)
 
         for mtime, convo_id, transcript_path in entries:
             title = None
             is_subagent = False
-            is_foreign_project = False
             has_user_prompt = False
 
             try:
                 with open(transcript_path, "r", encoding="utf-8", errors="ignore") as f:
                     for idx, line in enumerate(f):
-                        if idx > 30:
+                        if idx > 25:
                             break
                         try:
                             step = json.loads(line)
 
-                            # Subagentes reportan mediante send_message
+                            # 1. Subagentes reportan mediante send_message
                             tool_calls = step.get("tool_calls", [])
                             if isinstance(tool_calls, list):
                                 for tc in tool_calls:
-                                    if tc.get("name") == "send_message":
+                                    if isinstance(tc, dict) and tc.get("name") == "send_message":
                                         is_subagent = True
                                         break
                             if is_subagent:
@@ -471,46 +501,57 @@ def get_chats_from_disk():
 
                             content = step.get("content", "")
                             if isinstance(content, str):
-                                content_lower = content.lower()
-                                if any(fk in content_lower for fk in forbidden_keywords):
-                                    is_foreign_project = True
+                                c_lower = content.lower()
+                                if any(pat in c_lower for pat in subagent_patterns):
+                                    is_subagent = True
                                     break
 
-                                # Extraer titulo oficial de Antigravity (# USER Objective:)
-                                if not title and "# USER Objective:" in content:
-                                    obj_match = re.search(r"#\s*USER Objective:\s*([^\n\r]+)", content)
+                                # Extraer titulo si tiene USER Objective oficial
+                                if not title and "# user objective:" in c_lower:
+                                    obj_match = re.search(r"#\s*USER Objective:\s*([^\n\r]+)", content, re.IGNORECASE)
                                     if obj_match:
-                                        t = obj_match.group(1).strip()
-                                        if t and not t.startswith("{{") and len(t) > 3:
-                                            title = t[:50]
+                                        raw_t = obj_match.group(1).strip()
+                                        if raw_t and not raw_t.startswith("{{") and len(raw_t) > 3:
+                                            title = clean_chat_title(raw_t)
 
-                                # Extraer texto limpio de primer mensaje si no hay titulo oficial
+                                # Extraer del primer prompt explicito del usuario
                                 if step.get("type") == "USER_INPUT" and step.get("source") == "USER_EXPLICIT":
                                     has_user_prompt = True
                                     if not title:
                                         match = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", content, re.DOTALL)
                                         prompt_text = match.group(1).strip() if match else content.strip()
-                                        # Descartar prompts tipicos de subagentes
-                                        if prompt_text.startswith("Audita todos") or prompt_text.startswith("Audita las dependencias") or prompt_text.startswith("Escribe la documentacion"):
+                                        p_lower = prompt_text.lower()
+                                        if any(pat in p_lower for pat in subagent_patterns):
                                             is_subagent = True
                                             break
-                                        if prompt_text:
-                                            first_line = prompt_text.split("\n")[0].strip()
+
+                                        lines = [l.strip() for l in prompt_text.split("\n") if l.strip()]
+                                        if lines:
+                                            first_line = lines[0]
+                                            # Limpiar prefijos markdown
                                             first_line = re.sub(r'^[#\-\*\s]+', '', first_line)
+                                            if first_line.lower().startswith("teamwork project prompt"):
+                                                # Buscar siguiente linea util
+                                                for extra_l in lines[1:4]:
+                                                    clean_ex = re.sub(r'^[#\-\*\s]+', '', extra_l).strip()
+                                                    if clean_ex and len(clean_ex) > 4 and not clean_ex.startswith("Working directory"):
+                                                        first_line = clean_ex
+                                                        break
                                             if first_line and len(first_line) > 3:
-                                                title = first_line[:45]
+                                                title = clean_chat_title(first_line)
                         except Exception:
                             pass
             except Exception:
                 continue
 
-            if is_subagent or is_foreign_project or not has_user_prompt:
+            if is_subagent or not has_user_prompt:
                 continue
 
-            title = title or f"Conversacion {convo_id[:8]}"
-            chats.append({"id": convo_id, "title": title, "mtime": mtime})
+            if not title:
+                title = f"Conversacion {convo_id[:8]}"
 
-            if len(chats) >= 10:
+            chats.append({"id": convo_id, "title": title, "mtime": mtime})
+            if len(chats) >= 45:
                 break
 
     except Exception as e:
@@ -520,118 +561,124 @@ def get_chats_from_disk():
 
 
 def get_antigravity_chats():
-    cdp_res = None
-    try:
-        js = """
-        (() => {
-            const currentId = window.location.pathname.replace('/c/', '').split('?')[0];
-            const seen = new Set();
-            const chats = [];
-
-            const addChat = (id, rawTitle, isActive) => {
-                if (!id || seen.has(id)) return;
-                if (id.length < 20 || !/^[a-f0-9\\-]+$/i.test(id)) return;
-                seen.add(id);
-
-                let title = (rawTitle || '').replace(/\\s+/g, ' ').trim();
-                title = title.replace(/\\b(Delete|Archive|Rename|Pin|Active|Cerrar|Eliminar)\\b/gi, '').trim();
-                if (!title || title === id) {
-                    title = 'Conversacion ' + id.slice(0, 8);
-                }
-                chats.push({
-                    id: id,
-                    title: title,
-                    active: Boolean(isActive || (id === currentId))
-                });
-            };
-
-            // 1. Antigravity Convo Pills y elementos especificos de sesion
-            const pills = Array.from(document.querySelectorAll('[data-testid^="convo-pill-"], [data-testid*="conversation-item"], [data-testid*="convo-item"]'));
-            pills.forEach(p => {
-                const testId = p.getAttribute('data-testid') || '';
-                let id = testId.replace('convo-pill-', '').replace('conversation-item-', '').replace('convo-item-', '').trim();
-                if (!id) {
-                    id = p.getAttribute('data-conversation-id') || p.getAttribute('data-convo-id') || '';
-                }
-                if (id) {
-                    const text = p.innerText || p.getAttribute('aria-label') || '';
-                    addChat(id, text, id === currentId);
-                }
-            });
-
-            // 2. Enlaces directos a chats en la barra lateral
-            const links = Array.from(document.querySelectorAll('a[href*="/c/"]'));
-            links.forEach(a => {
-                const href = a.getAttribute('href') || '';
-                const match = href.match(/\\/c\\/([a-f0-9\\-]{20,})/);
-                if (match) {
-                    const id = match[1];
-                    let title = a.getAttribute('aria-label') || '';
-                    if (!title) {
-                        const lines = a.innerText.split('\\n').map(s => s.trim()).filter(Boolean);
-                        title = lines[0] || '';
-                    }
-                    if (!title && a.parentElement) {
-                        const pLines = a.parentElement.innerText.split('\\n').map(s => s.trim()).filter(Boolean);
-                        title = pLines[0] || '';
-                    }
-                    addChat(id, title, id === currentId);
-                }
-            });
-
-            // 3. Botones o contenedores con data-conversation-id
-            const dataElems = Array.from(document.querySelectorAll('[data-conversation-id], [data-convo-id]'));
-            dataElems.forEach(el => {
-                const id = el.getAttribute('data-conversation-id') || el.getAttribute('data-convo-id') || '';
-                if (id) {
-                    const text = el.innerText || el.getAttribute('aria-label') || '';
-                    addChat(id, text, id === currentId);
-                }
-            });
-
-            // 4. Asegurar que el chat actual este incluido en primer lugar si no fue capturado
-            if (currentId && currentId.length >= 20 && !seen.has(currentId)) {
-                let docTitle = document.title || '';
-                docTitle = docTitle.replace(/\\s*-\\s*Antigravity.*$/i, '').trim();
-                if (!docTitle || docTitle.toLowerCase().includes('antigravity')) {
-                    docTitle = 'Chat Actual (' + currentId.slice(0, 8) + ')';
-                }
-                chats.unshift({
-                    id: currentId,
-                    title: docTitle,
-                    active: true
-                });
-                seen.add(currentId);
-            }
-
-            return { current_id: currentId, chats: chats };
-        })()
-        """
-        cdp_res = eval_in_antigravity(js)
-    except Exception as e:
-        print(f"[TARS Web] Error en get_antigravity_chats CDP: {e}")
-
-    current_id = ""
+    """Obtiene todos los chats abiertos en Antigravity (multiples ventanas/pestañas via CDP) y los combina con los chats recientes del usuario."""
+    page_targets = get_all_devtools_page_targets()
     dom_chats = []
-    if isinstance(cdp_res, dict):
-        current_id = cdp_res.get("current_id", "") or ""
-        dom_chats = cdp_res.get("chats", []) or []
+    active_ids = set()
+    current_id = ""
 
-    # Si CDP encontro chats en la interfaz de Antigravity, devolver EXCLUSIVAMENTE estos
-    if dom_chats:
-        for c in dom_chats:
-            c["active"] = (c["id"] == current_id)
-        return {"current_id": current_id, "chats": dom_chats}
+    js_scan = """
+    (() => {
+        const curId = window.location.pathname.replace('/c/', '').split('?')[0];
+        const seen = new Set();
+        const found = [];
 
-    # Fallback exclusivo a disco si no hay sesion activa detectada por CDP
+        const add = (id, rawTitle, isAct) => {
+            if (!id || seen.has(id)) return;
+            if (id.length < 20 || !/^[a-f0-9\\-]+$/i.test(id)) return;
+            seen.add(id);
+            let t = (rawTitle || '').replace(/\\s+/g, ' ').trim();
+            t = t.replace(/\\b(Delete|Archive|Rename|Pin|Active|Cerrar|Eliminar)\\b/gi, '').trim();
+            found.push({ id: id, title: t, active: Boolean(isAct || (id === curId)) });
+        };
+
+        const pills = Array.from(document.querySelectorAll('[data-testid^="convo-pill-"], [data-testid*="conversation-item"], [data-testid*="convo-item"]'));
+        pills.forEach(p => {
+            const testId = p.getAttribute('data-testid') || '';
+            let id = testId.replace('convo-pill-', '').replace('conversation-item-', '').replace('convo-item-', '').trim();
+            if (!id) id = p.getAttribute('data-conversation-id') || p.getAttribute('data-convo-id') || '';
+            if (id) add(id, p.innerText || p.getAttribute('aria-label') || '', id === curId);
+        });
+
+        const links = Array.from(document.querySelectorAll('a[href*="/c/"]'));
+        links.forEach(a => {
+            const m = (a.getAttribute('href') || '').match(/\\/c\\/([a-f0-9\\-]{20,})/);
+            if (m) {
+                let t = a.getAttribute('aria-label') || '';
+                if (!t) {
+                    const l = a.innerText.split('\\n').map(s => s.trim()).filter(Boolean);
+                    t = l[0] || '';
+                }
+                add(m[1], t, m[1] === curId);
+            }
+        });
+
+        if (curId && curId.length >= 20 && !seen.has(curId)) {
+            let docT = (document.title || '').replace(/\\s*-\\s*Antigravity.*$/i, '').trim();
+            add(curId, docT, true);
+        }
+
+        return { current_id: curId, found: found };
+    })()
+    """
+
+    for target in page_targets:
+        ws_url = target.get("webSocketDebuggerUrl")
+        if not ws_url:
+            continue
+        try:
+            res = eval_in_antigravity(js_scan, ws_url=ws_url)
+            if isinstance(res, dict):
+                c_id = res.get("current_id") or ""
+                if c_id:
+                    active_ids.add(c_id)
+                    if not current_id:
+                        current_id = c_id
+                for ch in res.get("found", []):
+                    ch_id = ch.get("id")
+                    if ch_id:
+                        dom_chats.append(ch)
+        except Exception:
+            pass
+
+    # Recuperar lista curada de chats de usuario en disco
     disk_chats = get_chats_from_disk()
-    if not current_id and disk_chats:
-        current_id = disk_chats[0]["id"]
 
+    # Mapear titulos de DOM si son limpios
+    dom_title_map = {}
+    for ch in dom_chats:
+        cid = ch.get("id")
+        t = ch.get("title", "").strip()
+        t_clean = clean_chat_title(t)
+        if t_clean and not t_clean.lower().startswith("chat actual") and not t_clean.lower().startswith("conversacion"):
+            dom_title_map[cid] = t_clean
+
+    merged = []
+    seen_ids = set()
+
+    # 1. Incluir chats de disco (con titulos enriquecidos del DOM si existen)
     for c in disk_chats:
-        c["active"] = (c["id"] == current_id)
+        cid = c["id"]
+        if cid in seen_ids:
+            continue
+        seen_ids.add(cid)
+        if cid in dom_title_map:
+            c["title"] = dom_title_map[cid]
+        c["active"] = (cid in active_ids) or (cid == current_id)
+        merged.append(c)
 
-    return {"current_id": current_id, "chats": disk_chats}
+    # 2. Incluir cualquier chat detectado en DOM que no estuviera en disco
+    for c in dom_chats:
+        cid = c.get("id")
+        if not cid or cid in seen_ids:
+            continue
+        seen_ids.add(cid)
+        c_title = clean_chat_title(c.get("title") or f"Conversacion {cid[:8]}")
+        merged.append({
+            "id": cid,
+            "title": c_title,
+            "mtime": time.time(),
+            "active": (cid in active_ids) or (cid == current_id)
+        })
+
+    # Ordenar: chats activos en ventana primero, luego por mtime descendente
+    merged.sort(key=lambda x: (1 if x.get("active") else 0, x.get("mtime", 0)), reverse=True)
+
+    if not current_id and merged:
+        current_id = merged[0]["id"]
+        merged[0]["active"] = True
+
+    return {"current_id": current_id, "chats": merged[:35]}
 
 
 def switch_antigravity_chat(target):
