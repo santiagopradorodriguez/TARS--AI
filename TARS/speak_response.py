@@ -7,46 +7,7 @@ import subprocess
 import asyncio
 import certifi
 import edge_tts
-try:
-    from email.utils import parsedate_to_datetime as _parsedate_to_datetime
-    from datetime import timezone as _tz
-    from edge_tts import constants as _etts_const, communicate as _etts_comm, drm as _etts_drm
-    import aiohttp as _aiohttp
-    _NEW_WSS_URL = (
-        "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1"
-        f"?Ocp-Apim-Subscription-Key={_etts_const.TRUSTED_CLIENT_TOKEN}"
-    )
-    _etts_const.WSS_URL = _NEW_WSS_URL
-    _etts_comm.WSS_URL = _NEW_WSS_URL
-    def _safe_parse_rfc2616_date(date_str):
-        try:
-            p = _parsedate_to_datetime(date_str)
-            return (p.replace(tzinfo=_tz.utc) if p.tzinfo is None else p).timestamp()
-        except Exception:
-            return None
-    _etts_drm.DRM.parse_rfc2616_date = staticmethod(_safe_parse_rfc2616_date)
 
-    async def _patched_stream(self):
-        if self.state["stream_was_called"]:
-            raise RuntimeError("stream can only be called once.")
-        self.state["stream_was_called"] = True
-
-        for self.state["partial_text"] in self.texts:
-            self.state["chunk_audio_bytes"] = 0
-            try:
-                async for message in self._Communicate__stream():
-                    yield message
-            except _aiohttp.ClientResponseError as e:
-                if e.status not in (403, 429):
-                    raise
-                _etts_drm.DRM.handle_client_response_error(e)
-                self.state["chunk_audio_bytes"] = 0
-                async for message in self._Communicate__stream():
-                    yield message
-
-    _etts_comm.Communicate.stream = _patched_stream
-except Exception:
-    pass
 sys.path.append("/home/santiago/.gemini/config")
 os.environ["SSL_CERT_FILE"] = certifi.where()
 

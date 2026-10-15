@@ -1,17 +1,38 @@
 #!/usr/bin/env python3
+import sys
 import subprocess
 import os
 import re
 import time
 import asyncio
-import sys
-sys.path.append("/home/santiago/.gemini/config")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+if "/home/santiago/.gemini/config" not in sys.path:
+    sys.path.append("/home/santiago/.gemini/config")
+
+def get_resource(filename, fallback_dirs=("/home/santiago/.gemini/config", "/home/santiago/repositorios/Jarvis-Assistant/TARS")):
+    local_path = os.path.join(BASE_DIR, filename)
+    if os.path.exists(local_path):
+        return local_path
+    for fb in fallback_dirs:
+        fb_path = os.path.join(fb, filename)
+        if os.path.exists(fb_path):
+            return fb_path
+    return local_path
+
+import certifi
 import edge_tts
 from tars_voice_engine import synthesize_speech, get_voice
 
+os.environ["SSL_CERT_FILE"] = certifi.where()
+
 PYTHON_BIN = "/home/santiago/.gemini/tts_venv/bin/python"
-TARS_PLAYER = "/home/santiago/.gemini/config/tars_player.py"
-DEFAULT_SOUND = "/home/santiago/.gemini/config/tenes_un_mensaje_de_whatsapp.wav"
+if not os.path.exists(PYTHON_BIN):
+    PYTHON_BIN = sys.executable
+
+TARS_PLAYER = get_resource("tars_player.py")
+DEFAULT_SOUND = get_resource("tenes_un_mensaje_de_whatsapp.wav")
 VOICE = "es-AR-TomasNeural"
 
 recent_senders = {}
@@ -32,31 +53,42 @@ def announce_message(sender_name):
     wav_file = "/tmp/wa_msg.wav"
 
     try:
+        if os.path.exists(wav_file):
+            os.remove(wav_file)
+        if os.path.exists(mp3_file):
+            os.remove(mp3_file)
+    except Exception:
+        pass
+
+    success = False
+    try:
         # Sintetizar usando el motor dual (Puck o Edge-TTS según selección)
         success = synthesize_speech(text, wav_file)
-        if success and os.path.exists(wav_file):
+        if success and os.path.exists(wav_file) and os.path.getsize(wav_file) > 100:
             subprocess.run([PYTHON_BIN, TARS_PLAYER, wav_file],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return
     except Exception as e:
         print(f"Error en TTS dual de WhatsApp: {e}", flush=True)
+
+    if not (success and os.path.exists(wav_file) and os.path.getsize(wav_file) > 100):
         try:
             asyncio.run(generate_speech(text, mp3_file))
-            if os.path.exists(mp3_file):
+            if os.path.exists(mp3_file) and os.path.getsize(mp3_file) > 100:
                 subprocess.run(["ffmpeg", "-y", "-i", mp3_file, wav_file],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if os.path.exists(wav_file):
+                if os.path.exists(wav_file) and os.path.getsize(wav_file) > 100:
                     subprocess.run([PYTHON_BIN, TARS_PLAYER, wav_file],
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     return
-        except Exception:
-            pass
+        except Exception as e2:
+            print(f"Error en generate_speech de WhatsApp: {e2}", flush=True)
 
     # Fallback si falla todo: reproducir sonido base según la voz activa
     fallback_sound = DEFAULT_SOUND
     try:
         if get_voice() == "puck":
-            puck_sound = "/home/santiago/.gemini/config/cues_puck/tenes_un_mensaje_de_whatsapp.wav"
+            puck_sound = get_resource("cues_puck/tenes_un_mensaje_de_whatsapp.wav")
             if os.path.exists(puck_sound):
                 fallback_sound = puck_sound
     except Exception:
@@ -102,7 +134,7 @@ def main():
 def process_notification(call_lines, strings):
     # Si TARS está en modo apagado (Rojo), silencio absoluto
     try:
-        state_f = "/home/santiago/.gemini/config/tars_state.json"
+        state_f = get_resource("tars_state.json")
         if os.path.exists(state_f):
             import json
             with open(state_f, "r") as sf:
@@ -113,7 +145,7 @@ def process_notification(call_lines, strings):
 
     full_text = "\n".join(call_lines)
     # Detectar si la notificación proviene de ZapZap o WhatsApp en cualquier campo
-    is_zapzap = bool(re.search(r'(?:ZapZap|zapzap|com\.rtosta\.zapzap|WhatsApp)', full_text, re.IGNORECASE))
+    is_zapzap = bool(re.search(r'(?:ZapZap|zapzap|com\.rtosta\.zapzap|WhatsApp|whatsdesk)', full_text, re.IGNORECASE))
     if not is_zapzap:
         return
 

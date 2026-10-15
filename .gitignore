@@ -22,3 +22,4 @@ TARS/web/media/*.png
 TARS/web/media/*.txt
 # Estado interno de TARS (contiene info de la sesión)
 TARS/tars_state.json
+.aider*

@@ -14,6 +14,10 @@ mkdir -p "$CONFIG_DIR/web/static" "$CONFIG_DIR/web/media"
 cp "$REPO_DIR/TARS/tars_web_server.py" "$CONFIG_DIR/tars_web_server.py"
 cp "$REPO_DIR/TARS/speak_response.py" "$CONFIG_DIR/speak_response.py" 2>/dev/null || true
 cp "$REPO_DIR/TARS/tars_voice_engine.py" "$CONFIG_DIR/tars_voice_engine.py" 2>/dev/null || true
+cp "$REPO_DIR/TARS/zapzap_listener.py" "$CONFIG_DIR/zapzap_listener.py" 2>/dev/null || true
+cp "$REPO_DIR/TARS/tars_player.py" "$CONFIG_DIR/tars_player.py" 2>/dev/null || true
+cp -r "$REPO_DIR/TARS/cues_puck" "$CONFIG_DIR/" 2>/dev/null || true
+cp "$REPO_DIR/TARS/"*.wav "$CONFIG_DIR/" 2>/dev/null || true
 if [ -f "$REPO_DIR/TARS/dormir_hasta_las_8.sh" ]; then
     chmod +x "$REPO_DIR/TARS/dormir_hasta_las_8.sh"
     cp "$REPO_DIR/TARS/dormir_hasta_las_8.sh" "$CONFIG_DIR/dormir_hasta_las_8.sh"
@@ -37,6 +41,13 @@ if systemctl --user list-unit-files | grep -q "tars-web.service"; then
     systemctl --user reset-failed tars-web.service 2>/dev/null || true
     systemctl --user restart tars-web.service
     systemctl --user is-active tars-web.service
+fi
+
+if systemctl --user list-unit-files | grep -q "zapzap-voice-notifier.service"; then
+    echo "Reiniciando servicio zapzap-voice-notifier.service..."
+    systemctl --user reset-failed zapzap-voice-notifier.service 2>/dev/null || true
+    systemctl --user restart zapzap-voice-notifier.service
+    systemctl --user is-active zapzap-voice-notifier.service
 fi
 
 if systemctl --user list-unit-files | grep -q "tars-tunnel.service"; then

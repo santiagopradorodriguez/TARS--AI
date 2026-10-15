@@ -7,7 +7,19 @@ import subprocess
 
 LOCK_FILE = "/tmp/tars_speaking.lock"
 AUDIO_FILE = sys.argv[1] if len(sys.argv) > 1 else "/tmp/antigravity_response.mp3"
-CHIME_FILE = "/home/santiago/.gemini/config/gemini_chime.wav"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def get_resource(filename, fallback_dirs=("/home/santiago/.gemini/config", "/home/santiago/repositorios/Jarvis-Assistant/TARS")):
+    local_path = os.path.join(BASE_DIR, filename)
+    if os.path.exists(local_path):
+        return local_path
+    for fb in fallback_dirs:
+        fb_path = os.path.join(fb, filename)
+        if os.path.exists(fb_path):
+            return fb_path
+    return local_path
+
+CHIME_FILE = get_resource("gemini_chime.wav")
 
 def cleanup(signum=None, frame=None):
     if os.path.exists(LOCK_FILE):
@@ -42,7 +54,7 @@ def main():
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
         if "antigravity_response" in AUDIO_FILE:
-            turn_cue = "/home/santiago/.gemini/config/tars_your_turn.wav"
+            turn_cue = get_resource("tars_your_turn.wav")
             if os.path.exists(turn_cue):
                 subprocess.run(["paplay", turn_cue],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

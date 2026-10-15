@@ -1,0 +1,14 @@
+[Unit]
+Description=ZapZap WhatsApp Voice Notification Daemon
+After=graphical-session.target sound.target
+
+[Service]
+Type=simple
+Environment="DISPLAY=:0"
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/santiago/.gemini/tts_venv/bin/python -u /home/santiago/.gemini/config/zapzap_listener.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
