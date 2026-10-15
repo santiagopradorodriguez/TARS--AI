@@ -422,43 +422,97 @@ def get_current_antigravity_convo_id():
 
 
 def get_chats_from_disk():
-    """Fallback y complemento: busca todas las conversaciones guardadas en ~/.gemini/antigravity/brain."""
+    """Fallback: busca conversaciones guardadas en ~/.gemini/antigravity/brain que pertenezcan al proyecto activo y no sean subagentes."""
     brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
     if not os.path.exists(brain_dir):
         return []
 
     chats = []
+    # Carpetas o proyectos prohibidos (otros proyectos del usuario)
+    forbidden_keywords = ["teorica", "teo2", "fisica", "msi-fan-control", "cuantica"]
+
     try:
+        entries = []
         for convo_id in os.listdir(brain_dir):
-            if convo_id.startswith(".") or convo_id == "tempmediaStorage":
+            if convo_id.startswith(".") or convo_id == "tempmediaStorage" or len(convo_id) < 20:
                 continue
             transcript_path = os.path.join(brain_dir, convo_id, ".system_generated", "logs", "transcript.jsonl")
             if not os.path.exists(transcript_path):
                 continue
-
             mtime = os.path.getmtime(transcript_path)
-            title = f"Chat {convo_id[:8]}"
+            entries.append((mtime, convo_id, transcript_path))
+
+        # Ordenar por fecha de modificacion mas reciente
+        entries.sort(key=lambda x: x[0], reverse=True)
+
+        for mtime, convo_id, transcript_path in entries:
+            title = None
+            is_subagent = False
+            is_foreign_project = False
+            has_user_prompt = False
+
             try:
                 with open(transcript_path, "r", encoding="utf-8", errors="ignore") as f:
-                    for line in f:
+                    for idx, line in enumerate(f):
+                        if idx > 30:
+                            break
                         try:
                             step = json.loads(line)
-                            if step.get("type") == "USER_INPUT" and step.get("source") == "USER_EXPLICIT":
-                                content = step.get("content", "")
-                                match = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", content, re.DOTALL)
-                                prompt_text = match.group(1).strip() if match else content.strip()
-                                if prompt_text:
-                                    first_line = prompt_text.split("\n")[0].strip()
-                                    if first_line:
-                                        title = first_line[:45]
+
+                            # Subagentes reportan mediante send_message
+                            tool_calls = step.get("tool_calls", [])
+                            if isinstance(tool_calls, list):
+                                for tc in tool_calls:
+                                    if tc.get("name") == "send_message":
+                                        is_subagent = True
                                         break
+                            if is_subagent:
+                                break
+
+                            content = step.get("content", "")
+                            if isinstance(content, str):
+                                content_lower = content.lower()
+                                if any(fk in content_lower for fk in forbidden_keywords):
+                                    is_foreign_project = True
+                                    break
+
+                                # Extraer titulo oficial de Antigravity (# USER Objective:)
+                                if not title and "# USER Objective:" in content:
+                                    obj_match = re.search(r"#\s*USER Objective:\s*([^\n\r]+)", content)
+                                    if obj_match:
+                                        t = obj_match.group(1).strip()
+                                        if t and not t.startswith("{{") and len(t) > 3:
+                                            title = t[:50]
+
+                                # Extraer texto limpio de primer mensaje si no hay titulo oficial
+                                if step.get("type") == "USER_INPUT" and step.get("source") == "USER_EXPLICIT":
+                                    has_user_prompt = True
+                                    if not title:
+                                        match = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", content, re.DOTALL)
+                                        prompt_text = match.group(1).strip() if match else content.strip()
+                                        # Descartar prompts tipicos de subagentes
+                                        if prompt_text.startswith("Audita todos") or prompt_text.startswith("Audita las dependencias") or prompt_text.startswith("Escribe la documentacion"):
+                                            is_subagent = True
+                                            break
+                                        if prompt_text:
+                                            first_line = prompt_text.split("\n")[0].strip()
+                                            first_line = re.sub(r'^[#\-\*\s]+', '', first_line)
+                                            if first_line and len(first_line) > 3:
+                                                title = first_line[:45]
                         except Exception:
                             pass
             except Exception:
-                pass
+                continue
+
+            if is_subagent or is_foreign_project or not has_user_prompt:
+                continue
+
+            title = title or f"Conversacion {convo_id[:8]}"
             chats.append({"id": convo_id, "title": title, "mtime": mtime})
 
-        chats.sort(key=lambda x: x.get("mtime", 0), reverse=True)
+            if len(chats) >= 10:
+                break
+
     except Exception as e:
         print(f"[TARS Web] Error leyendo chats de disco: {e}")
 
@@ -474,43 +528,80 @@ def get_antigravity_chats():
             const seen = new Set();
             const chats = [];
 
-            // 1. Antigravity nuevo: convo-pill
-            const pills = Array.from(document.querySelectorAll('[data-testid^="convo-pill-"]'));
+            const addChat = (id, rawTitle, isActive) => {
+                if (!id || seen.has(id)) return;
+                if (id.length < 20 || !/^[a-f0-9\\-]+$/i.test(id)) return;
+                seen.add(id);
+
+                let title = (rawTitle || '').replace(/\\s+/g, ' ').trim();
+                title = title.replace(/\\b(Delete|Archive|Rename|Pin|Active|Cerrar|Eliminar)\\b/gi, '').trim();
+                if (!title || title === id) {
+                    title = 'Conversacion ' + id.slice(0, 8);
+                }
+                chats.push({
+                    id: id,
+                    title: title,
+                    active: Boolean(isActive || (id === currentId))
+                });
+            };
+
+            // 1. Antigravity Convo Pills y elementos especificos de sesion
+            const pills = Array.from(document.querySelectorAll('[data-testid^="convo-pill-"], [data-testid*="conversation-item"], [data-testid*="convo-item"]'));
             pills.forEach(p => {
-                const id = (p.getAttribute('data-testid') || '').replace('convo-pill-', '').trim();
-                if (id && !seen.has(id)) {
-                    seen.add(id);
-                    const title = p.innerText.trim() || ('Conversacion ' + id.slice(0, 8));
-                    chats.push({
-                        id: id,
-                        title: title,
-                        active: id === currentId
-                    });
+                const testId = p.getAttribute('data-testid') || '';
+                let id = testId.replace('convo-pill-', '').replace('conversation-item-', '').replace('convo-item-', '').trim();
+                if (!id) {
+                    id = p.getAttribute('data-conversation-id') || p.getAttribute('data-convo-id') || '';
+                }
+                if (id) {
+                    const text = p.innerText || p.getAttribute('aria-label') || '';
+                    addChat(id, text, id === currentId);
                 }
             });
 
-            // 2. Fallback: enlaces a[href*="/c/"]
-            if (chats.length === 0) {
-                const links = Array.from(document.querySelectorAll('a[href*="/c/"]'));
-                links.forEach(a => {
-                    const href = a.getAttribute('href') || '';
-                    const match = href.match(/\\/c\\/([a-f0-9\\-]+)/);
-                    if (match && !seen.has(match[1])) {
-                        seen.add(match[1]);
-                        let title = a.getAttribute('aria-label') || a.innerText.trim().replace(/\\n+/g, ' ');
-                        if (!title && a.parentElement) {
-                            title = a.parentElement.innerText.split('\\n')[0].trim();
-                        }
-                        if (!title) {
-                            title = 'Conversacion ' + match[1].slice(0, 8);
-                        }
-                        chats.push({
-                            id: match[1],
-                            title: title,
-                            active: match[1] === currentId
-                        });
+            // 2. Enlaces directos a chats en la barra lateral
+            const links = Array.from(document.querySelectorAll('a[href*="/c/"]'));
+            links.forEach(a => {
+                const href = a.getAttribute('href') || '';
+                const match = href.match(/\\/c\\/([a-f0-9\\-]{20,})/);
+                if (match) {
+                    const id = match[1];
+                    let title = a.getAttribute('aria-label') || '';
+                    if (!title) {
+                        const lines = a.innerText.split('\\n').map(s => s.trim()).filter(Boolean);
+                        title = lines[0] || '';
                     }
+                    if (!title && a.parentElement) {
+                        const pLines = a.parentElement.innerText.split('\\n').map(s => s.trim()).filter(Boolean);
+                        title = pLines[0] || '';
+                    }
+                    addChat(id, title, id === currentId);
+                }
+            });
+
+            // 3. Botones o contenedores con data-conversation-id
+            const dataElems = Array.from(document.querySelectorAll('[data-conversation-id], [data-convo-id]'));
+            dataElems.forEach(el => {
+                const id = el.getAttribute('data-conversation-id') || el.getAttribute('data-convo-id') || '';
+                if (id) {
+                    const text = el.innerText || el.getAttribute('aria-label') || '';
+                    addChat(id, text, id === currentId);
+                }
+            });
+
+            // 4. Asegurar que el chat actual este incluido en primer lugar si no fue capturado
+            if (currentId && currentId.length >= 20 && !seen.has(currentId)) {
+                let docTitle = document.title || '';
+                docTitle = docTitle.replace(/\\s*-\\s*Antigravity.*$/i, '').trim();
+                if (!docTitle || docTitle.toLowerCase().includes('antigravity')) {
+                    docTitle = 'Chat Actual (' + currentId.slice(0, 8) + ')';
+                }
+                chats.unshift({
+                    id: currentId,
+                    title: docTitle,
+                    active: true
                 });
+                seen.add(currentId);
             }
 
             return { current_id: currentId, chats: chats };
@@ -526,35 +617,21 @@ def get_antigravity_chats():
         current_id = cdp_res.get("current_id", "") or ""
         dom_chats = cdp_res.get("chats", []) or []
 
-    disk_chats = get_chats_from_disk()
+    # Si CDP encontro chats en la interfaz de Antigravity, devolver EXCLUSIVAMENTE estos
+    if dom_chats:
+        for c in dom_chats:
+            c["active"] = (c["id"] == current_id)
+        return {"current_id": current_id, "chats": dom_chats}
 
+    # Fallback exclusivo a disco si no hay sesion activa detectada por CDP
+    disk_chats = get_chats_from_disk()
     if not current_id and disk_chats:
         current_id = disk_chats[0]["id"]
 
-    seen_ids = set()
-    merged_chats = []
-
-    for c in dom_chats:
-        cid = c.get("id")
-        if cid and cid not in seen_ids:
-            seen_ids.add(cid)
-            merged_chats.append({
-                "id": cid,
-                "title": c.get("title") or f"Chat {cid[:8]}",
-                "active": cid == current_id
-            })
-
     for c in disk_chats:
-        cid = c.get("id")
-        if cid and cid not in seen_ids:
-            seen_ids.add(cid)
-            merged_chats.append({
-                "id": cid,
-                "title": c.get("title") or f"Chat {cid[:8]}",
-                "active": cid == current_id
-            })
+        c["active"] = (c["id"] == current_id)
 
-    return {"current_id": current_id, "chats": merged_chats}
+    return {"current_id": current_id, "chats": disk_chats}
 
 
 def switch_antigravity_chat(target):
@@ -632,7 +709,7 @@ def switch_antigravity_chat(target):
     js_click = f"""
     (() => {{
         const targetId = "{target_id}";
-        const pill = document.querySelector('[data-testid="convo-pill-' + targetId + '"]');
+        const pill = document.querySelector('[data-testid="convo-pill-' + targetId + '"], [data-testid="conversation-item-' + targetId + '"], [data-convo-id="' + targetId + '"]');
         if (pill) {{
             const btn = pill.closest('[role="button"]') || pill;
             btn.click();
@@ -645,8 +722,9 @@ def switch_antigravity_chat(target):
             const title = link.getAttribute('aria-label') || link.innerText.trim().replace(/\\n+/g, ' ');
             return {{ success: true, id: targetId, title: title }};
         }}
-        // Fallback: Si no esta en el sidebar visible, navegar directamente por pathname
-        window.location.pathname = '/c/' + targetId;
+        // Fallback: Si no esta en el sidebar visible, navegar directamente preservando query params (?section=...)
+        const search = window.location.search || '';
+        window.location.href = '/c/' + targetId + search;
         return {{ success: true, id: targetId, title: "{target_title or ''}" }};
     }})()
     """
