@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   build-apk:
-    name: Compilar APK Android
+    name: Compilar APK Android Oficial Firmado
     runs-on: ubuntu-latest
 
     steps:
@@ -28,16 +28,17 @@ jobs:
       - name: Configurar Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Compilar APK Debug
+      - name: Generar Keystore y Compilar APK Release Firmado
         run: |
           cd android
+          keytool -genkey -v -keystore tars.keystore -alias tars -keyalg RSA -keysize 2048 -validity 10000 -storepass tars123456 -keypass tars123456 -dname "CN=TARS, OU=AI, O=TARS, L=BA, S=BA, C=AR"
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon
 
       - name: Renombrar APK para descarga directa
         run: |
           mkdir -p build_output
-          cp android/app/build/outputs/apk/debug/app-debug.apk build_output/TARS-Assistant.apk
+          cp android/app/build/outputs/apk/release/app-release.apk build_output/TARS-Assistant.apk
 
       - name: Subir APK como Artefacto
         uses: actions/upload-artifact@v4
@@ -49,8 +50,8 @@ jobs:
       - name: Publicar Release directa para celular
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0
-          name: TARS Android v1.0.0
+          tag_name: v1.0.1
+          name: TARS Android v1.0.1 - Release Firmado
           draft: false
           prerelease: false
           files: build_output/TARS-Assistant.apk
