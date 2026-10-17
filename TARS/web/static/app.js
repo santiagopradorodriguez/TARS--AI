@@ -542,11 +542,11 @@ window.cancelCurrentProcessing = async function() {
         micBtn.classList.remove('recording');
         if (cancelProcLabel) cancelProcLabel.innerText = 'Cortar';
         if (cancelProcBtn) cancelProcBtn.classList.remove('active-danger');
-        micStatusLabel.innerText = '🛑 Audio cancelado (no enviado)';
+        micStatusLabel.innerText = '[Cancelado] Audio cancelado (no enviado)';
         try {
             mediaRecorder.stop();
         } catch (e) {}
-        showWhatsAppToast('🛑 Grabación descartada', 'El mensaje de voz fue cancelado y no se envió.');
+        showWhatsAppToast('Grabación descartada', 'El mensaje de voz fue cancelado y no se envió.');
         return;
     }
 
@@ -564,12 +564,12 @@ window.cancelCurrentProcessing = async function() {
     clearUserCancelChips();
     if (cancelProcBtn) cancelProcBtn.classList.remove('active-danger');
     if (cancelProcLabel) cancelProcLabel.innerText = 'Cortar';
-    micStatusLabel.innerText = '🛑 Cortando procesamiento en PC...';
+    micStatusLabel.innerText = '[Deteniendo] Cortando procesamiento en PC...';
 
     try {
         await fetch('/api/cancel', { method: 'POST' });
-        micStatusLabel.innerText = '🛑 Procesamiento detenido';
-        showWhatsAppToast('🛑 Procesamiento cortado', 'Se detuvo la ejecución en Antigravity IDE.');
+        micStatusLabel.innerText = '[Detenido] Procesamiento detenido';
+        showWhatsAppToast('Procesamiento cortado', 'Se detuvo la ejecución en Antigravity IDE.');
         setTimeout(() => {
             if (!isRecording && micStatusLabel.innerText.includes('detenido')) {
                 micStatusLabel.innerText = 'Toca para hablar';
@@ -1089,7 +1089,7 @@ if (pwaInstallBtn) {
         } else {
             const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
             if (isIOS) {
-                alert('📱 Para instalar TARS en iPhone / iPad:\n\n1. Tocá el botón "Compartir" de Safari (cuadrado con flecha hacia arriba).\n2. Elegí "Agregar a la pantalla de inicio".');
+                alert('Para instalar TARS en iPhone / iPad:\n\n1. Tocá el botón "Compartir" de Safari (cuadrado con flecha hacia arriba).\n2. Elegí "Agregar a la pantalla de inicio".');
                 return;
             }
 
@@ -1097,14 +1097,14 @@ if (pwaInstallBtn) {
                 const res = await fetch('/api/tunnel_url');
                 const tdata = await res.json();
                 if (tdata.tunnel_url && !window.location.origin.includes('trycloudflare.com')) {
-                    if (confirm('🔒 Google Chrome en Android bloquea compilar Apps desde IPs privadas con certificado local.\n\n¿Querés abrir TARS con el enlace seguro de Cloudflare para instalar la App directamente en 1 clic?')) {
+                    if (confirm('Google Chrome en Android bloquea compilar Apps desde IPs privadas con certificado local.\n\n¿Querés abrir TARS con el enlace seguro de Cloudflare para instalar la App directamente en 1 clic?')) {
                         window.location.href = tdata.tunnel_url;
                         return;
                     }
                 }
             } catch (err) {}
 
-            alert('📱 Para instalar TARS en tu celular:\n\nOpción 1 (Chrome): Tocá los 3 puntitos (⋮) > "Agregar a la pantalla principal".\n\nOpción 2 (Samsung): Abrí esta página en el navegador "Samsung Internet" y tocalo desde la barra para instalarlo.');
+            alert('Para instalar TARS en tu celular:\n\nOpción 1 (Chrome): Tocá los 3 puntitos > "Agregar a la pantalla principal".\n\nOpción 2 (Samsung): Abrí esta página en el navegador "Samsung Internet" y tocalo desde la barra para instalarlo.');
         }
     });
 }
@@ -2101,11 +2101,11 @@ async function triggerPhoneNotification(rawContent, customTitle = null, stepInde
             actions: [
                 {
                     action: 'toggle_voice',
-                    title: isMobileVoiceMuted ? '🔊 Activar voz' : '🔇 Silenciar voz'
+                    title: isMobileVoiceMuted ? 'Activar voz' : 'Silenciar voz'
                 },
                 {
                     action: 'open',
-                    title: '📱 Abrir TARS'
+                    title: 'Abrir TARS'
                 }
             ]
         };
@@ -2209,11 +2209,46 @@ let lastProgressToastTs = 0;
 let lastProgressToastStep = 0;
 const renderedStepIndices = new Set();
 
+const networkLatencyBadge = document.getElementById('network-latency-badge');
+const connectionStatusDot = document.getElementById('connection-status-dot');
+
+function updateNetworkLatency(latencyMs, isOnline) {
+    if (!networkLatencyBadge) return;
+    if (!isOnline) {
+        networkLatencyBadge.innerText = 'OFFLINE';
+        networkLatencyBadge.className = 'network-latency-badge offline';
+        networkLatencyBadge.title = 'Desconectado del servidor TARS. Reintentando conexion...';
+        if (connectionStatusDot) {
+            connectionStatusDot.className = 'status-indicator offline';
+        }
+        return;
+    }
+    networkLatencyBadge.innerText = `${latencyMs} ms`;
+    networkLatencyBadge.title = `Latencia en tiempo real: ${latencyMs} ms`;
+    if (connectionStatusDot) {
+        connectionStatusDot.className = 'status-indicator online';
+    }
+    if (latencyMs < 120) {
+        networkLatencyBadge.className = 'network-latency-badge good';
+    } else if (latencyMs < 350) {
+        networkLatencyBadge.className = 'network-latency-badge fair';
+    } else {
+        networkLatencyBadge.className = 'network-latency-badge poor';
+    }
+}
+
 async function syncWithAntigravity() {
     if (isSyncing) return;
     isSyncing = true;
+    const tStart = performance.now();
     try {
         const resp = await fetch(`/api/sync?last_index=${currentSyncIndex}&chat_id=${encodeURIComponent(activeChatId)}`);
+        const latencyMs = Math.round(performance.now() - tStart);
+        if (!resp.ok) {
+            updateNetworkLatency(null, false);
+            return;
+        }
+        updateNetworkLatency(latencyMs, true);
         const data = await resp.json();
 
         if (data.active_pc) {
@@ -2243,7 +2278,7 @@ async function syncWithAntigravity() {
             updateProcessingBubble(data.processing_info);
             const actDesc = data.processing_info.tool_action || "Pensando...";
             const stepsCnt = data.processing_info.steps_count || 1;
-            micStatusLabel.innerText = `⏳ Paso ${stepsCnt}: ${actDesc}`;
+            micStatusLabel.innerText = `Paso ${stepsCnt}: ${actDesc}`;
             if (cancelProcBtn) cancelProcBtn.classList.add('active-danger');
             if (cancelProcLabel && !isRecording) cancelProcLabel.innerText = 'Cortar IA';
             acquireWakeLock(true);
@@ -2254,7 +2289,7 @@ async function syncWithAntigravity() {
                 if (cancelProcBtn) cancelProcBtn.classList.remove('active-danger');
                 if (cancelProcLabel) cancelProcLabel.innerText = 'Cortar';
             }
-            if (!isRecording && micStatusLabel.innerText.startsWith("⏳ ")) {
+            if (!isRecording && micStatusLabel.innerText.startsWith("Paso ")) {
                 micStatusLabel.innerText = 'Toca para hablar';
             }
         }
@@ -2293,7 +2328,7 @@ async function syncWithAntigravity() {
             renderedStepIndices.add(data.step_index);
         }
     } catch (e) {
-        // Silencioso ante breves desconexiones
+        updateNetworkLatency(null, false);
     } finally {
         isSyncing = false;
     }

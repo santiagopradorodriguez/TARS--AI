@@ -29,9 +29,13 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.NetworkInterface
 import java.net.URL
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
@@ -422,14 +426,109 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun getLocalWifiIpAddress(): String? {
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return null
+            for (intf in interfaces) {
+                if (intf.isLoopback || !intf.isUp) continue
+                for (addr in intf.inetAddresses) {
+                    if (!addr.isLoopbackAddress && addr is Inet4Address) {
+                        val host = addr.hostAddress ?: ""
+                        if (host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.")) {
+                            return host
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {}
+        return null
+    }
+
+    private fun scanSubnetForTars(baseSubnet: String, onFound: (String) -> Unit, onFinished: (Boolean) -> Unit) {
+        activityScope.launch(Dispatchers.IO) {
+            var found = false
+            val candidateIps = (1..254).map { "$baseSubnet$it" }
+            val sortedIps = candidateIps.sortedBy { ip ->
+                val lastOctet = ip.substringAfterLast(".").toIntOrNull() ?: 0
+                when {
+                    lastOctet in 50..99 -> 0
+                    lastOctet in 1..30 -> 1
+                    lastOctet in 100..200 -> 2
+                    else -> 3
+                }
+            }
+
+            for (chunk in sortedIps.chunked(25)) {
+                if (found) break
+                val jobs = chunk.map { ip ->
+                    async {
+                        val testUrl = "https://$ip:8443"
+                        if (testEndpointReachable(testUrl, timeoutMs = 350)) {
+                            testUrl
+                        } else null
+                    }
+                }
+                val results = jobs.awaitAll()
+                val detected = results.firstOrNull { it != null }
+                if (detected != null) {
+                    found = true
+                    withContext(Dispatchers.Main) {
+                        onFound(detected)
+                    }
+                    break
+                }
+            }
+            withContext(Dispatchers.Main) {
+                onFinished(found)
+            }
+        }
+    }
+
     private fun showSettingsDialog(isFirstRun: Boolean = false) {
         val inflater = LayoutInflater.from(this)
         val dialogView = inflater.inflate(R.layout.dialog_settings, null)
         val editLocal = dialogView.findViewById<EditText>(R.id.editLocalIp)
         val editTs = dialogView.findViewById<EditText>(R.id.editTsDomain)
+        val btnScan = dialogView.findViewById<View>(R.id.btnScanLan)
+        val progressScan = dialogView.findViewById<View>(R.id.progressScanLan)
+        val textStatus = dialogView.findViewById<TextView>(R.id.textScanStatus)
 
         editLocal.setText(prefs.getString(KEY_LOCAL_IP, ""))
         editTs.setText(prefs.getString(KEY_TS_DOMAIN, ""))
+
+        btnScan?.setOnClickListener {
+            val localIp = getLocalWifiIpAddress()
+            if (localIp == null) {
+                textStatus?.text = "Conecta el Wi-Fi para buscar."
+                return@setOnClickListener
+            }
+            val baseSubnet = localIp.substringBeforeLast(".") + "."
+            btnScan.isEnabled = false
+            progressScan?.visibility = View.VISIBLE
+            textStatus?.text = "Buscando en $baseSubnet*..."
+
+            scanSubnetForTars(
+                baseSubnet,
+                onFound = { foundUrl ->
+                    editLocal.setText(foundUrl)
+                    textStatus?.text = "Detectado: $foundUrl"
+                    Toast.makeText(this@MainActivity, "Servidor TARS detectado", Toast.LENGTH_SHORT).show()
+                },
+                onFinished = { found ->
+                    btnScan.isEnabled = true
+                    progressScan?.visibility = View.GONE
+                    if (!found) {
+                        textStatus?.text = "No se encontro servidor en $baseSubnet*"
+                    }
+                }
+            )
+        }
+
+        if (isFirstRun && editLocal.text.isBlank()) {
+            dialogView.postDelayed({
+                btnScan?.performClick()
+            }, 400)
+        }
 
         val builder = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.settings_title)

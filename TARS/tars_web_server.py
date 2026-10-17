@@ -57,6 +57,22 @@ except Exception as _e:
 import vosk
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+try:
+    from integraciones import (
+        procesar_intencion_luces,
+        ControlLucesTuya,
+        procesar_intencion_heladera,
+        AmigosHeladera
+    )
+except Exception as _e:
+    procesar_intencion_luces = lambda t: None
+    procesar_intencion_heladera = lambda t: None
+    ControlLucesTuya = None
+    AmigosHeladera = None
+
 WEB_DIR = os.path.join(BASE_DIR, "web")
 STATIC_DIR = os.path.join(WEB_DIR, "static")
 MEDIA_DIR = os.path.join(WEB_DIR, "media")
@@ -1313,6 +1329,28 @@ async def handle_chat(request):
                         await asyncio.to_thread(ensure_remote_media_cached, rem_ip, m["url"])
                 return web.json_response(rem_res)
 
+        # Verificacion de integraciones directas (Luces Tuya y Amigos de la Heladera)
+        if user_text:
+            res_luces = procesar_intencion_luces(user_text)
+            if res_luces and res_luces.get("mensaje"):
+                reply_text = res_luces["mensaje"]
+                audio_url = await generate_tts_file(reply_text)
+                return web.json_response({
+                    "reply": reply_text,
+                    "audio_url": audio_url,
+                    "integration": "luces_tuya"
+                })
+
+            res_heladera = procesar_intencion_heladera(user_text)
+            if res_heladera and res_heladera.get("mensaje"):
+                reply_text = res_heladera["mensaje"]
+                audio_url = await generate_tts_file(reply_text)
+                return web.json_response({
+                    "reply": reply_text,
+                    "audio_url": audio_url,
+                    "integration": "amigos_heladera"
+                })
+
         reply_text, media, sent_to_ide = await asyncio.to_thread(
             execute_pc_task,
             user_text,
@@ -1399,7 +1437,7 @@ async def handle_audio(request):
             return web.json_response({
                 "cancelled": True,
                 "user_text": user_text or "[Cancelado]",
-                "reply": "🛑 Procesamiento cancelado antes de enviar."
+                "reply": "Procesamiento cancelado antes de enviar."
             })
 
         if not user_text:
@@ -1492,22 +1530,22 @@ def format_spanish_tool_action(t_name, args):
     cmd_line = str(args.get("CommandLine") or "").replace('"', "").replace("'", "").strip()
 
     if t_name == "view_file":
-        return f"📖 Leyendo {base_file}" if base_file else "📖 Leyendo archivo del proyecto"
+        return f"[Leyendo] {base_file}" if base_file else "[Leyendo] Archivo del proyecto"
     elif t_name in ("replace_file_content", "multi_replace_file_content"):
-        return f"✏️ Editando {base_file}" if base_file else "✏️ Editando código"
+        return f"[Editando] {base_file}" if base_file else "[Editando] Código"
     elif t_name == "write_to_file":
-        return f"📝 Creando/actualizando {base_file}" if base_file else "📝 Escribiendo archivo"
+        return f"[Creando] {base_file}" if base_file else "[Escribiendo] Archivo"
     elif t_name == "run_command":
         short_cmd = cmd_line.split("&&")[0].strip()[:42] if cmd_line else "comando"
-        return f"💻 Ejecutando: {short_cmd}"
+        return f"[Ejecutando] {short_cmd}"
     elif t_name == "list_dir":
-        return "📂 Listando archivos del directorio"
+        return "[Archivos] Listando directorio"
     elif t_name in ("grep_search", "find_by_name"):
-        return "🔍 Buscando en el código"
+        return "[Búsqueda] Buscando en el código"
     elif t_name in ("search_web", "read_url_content"):
-        return "🌐 Consultando información en la web"
+        return "[Web] Consultando información en la web"
     act = str(args.get("toolAction") or args.get("toolSummary") or t_name).replace('"', "").replace("'", "")
-    return f"⚙️ {act}" if act else "⚙️ Ejecutando herramienta"
+    return f"[Herramienta] {act}" if act else "[Herramienta] Ejecutando acción"
 
 
 def get_latest_transcript_message():
@@ -1590,7 +1628,7 @@ def get_latest_transcript_message():
                                             proc_info["recent_steps"] = proc_info["recent_steps"][-5:]
                                 else:
                                     proc_info["tool_name"] = ""
-                                    proc_info["tool_action"] = "🧠 Analizando y planificando respuesta..."
+                                    proc_info["tool_action"] = "[Pensando] Analizando y planificando respuesta..."
                                     proc_info["thought"] = "Analizando los próximos pasos..."
                                     proc_info["tool_detail"] = ""
                     except Exception:
@@ -2739,7 +2777,7 @@ async def handle_test_notify(request):
             await asyncio.sleep(delay)
         await asyncio.to_thread(
             send_web_push_all,
-            "🤖 TARS • Antigravity",
+            "TARS - Antigravity",
             "¡Hola! Esta notificación llegó en segundo plano con la pestaña cerrada, igual que un mensaje de WhatsApp."
         )
 
@@ -2774,6 +2812,51 @@ async def handle_cancel(request):
         if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
             return web.json_response(rem_res)
     res = await asyncio.to_thread(cancel_antigravity_ide)
+    return web.json_response(res)
+
+async def handle_integraciones_estado(request):
+    luces_inst = ControlLucesTuya() if ControlLucesTuya else None
+    heladera_inst = AmigosHeladera() if AmigosHeladera else None
+    return web.json_response({
+        "ok": True,
+        "luces": luces_inst.get_estado() if luces_inst else {},
+        "heladera": heladera_inst.listar_inventario() if heladera_inst else {}
+    })
+
+async def handle_integraciones_luces(request):
+    if not ControlLucesTuya:
+        return web.json_response({"ok": False, "error": "Modulo de luces no disponible"}, status=500)
+    data = await request.json() if request.can_read_body else {}
+    accion = data.get("accion", "estado")
+    luces = ControlLucesTuya()
+    if accion == "encender":
+        res = luces.encender(data.get("dispositivo"))
+    elif accion == "apagar":
+        res = luces.apagar(data.get("dispositivo"))
+    elif accion == "brillo":
+        res = luces.set_brillo(int(data.get("valor", 100)), data.get("dispositivo"))
+    elif accion == "color":
+        res = luces.set_color(str(data.get("color", "calido")), data.get("dispositivo"))
+    else:
+        res = luces.get_estado()
+    return web.json_response(res)
+
+async def handle_integraciones_heladera(request):
+    if not AmigosHeladera:
+        return web.json_response({"ok": False, "error": "Modulo de heladera no disponible"}, status=500)
+    heladera = AmigosHeladera()
+    if request.method == "GET":
+        return web.json_response(heladera.listar_inventario())
+    data = await request.json() if request.can_read_body else {}
+    accion = data.get("accion", "listar")
+    if accion == "recetas":
+        res = heladera.sugerir_recetas()
+    elif accion == "agregar":
+        res = heladera.agregar_item(data.get("item", ""), data.get("cantidad", "1 unidad"))
+    elif accion == "quitar":
+        res = heladera.quitar_item(data.get("item", ""))
+    else:
+        res = heladera.listar_inventario()
     return web.json_response(res)
 
 def init_app():
@@ -2816,6 +2899,10 @@ def init_app():
     app.router.add_post("/api/audio", handle_audio)
     app.router.add_get("/api/sync", handle_sync)
     app.router.add_get("/api/download", handle_download)
+    app.router.add_get("/api/integraciones/estado", handle_integraciones_estado)
+    app.router.add_post("/api/integraciones/luces", handle_integraciones_luces)
+    app.router.add_get("/api/integraciones/heladera", handle_integraciones_heladera)
+    app.router.add_post("/api/integraciones/heladera", handle_integraciones_heladera)
     app.router.add_static("/static/", STATIC_DIR)
     app.router.add_static("/media/", MEDIA_DIR)
     return app
@@ -3020,7 +3107,7 @@ async def watch_transcript_for_push():
                         LAST_NOTIFIED_STEP["idx"] = latest_idx
                         await asyncio.to_thread(
                             send_web_push_all,
-                            f"🤖 TARS ({pc_info.get('name', 'PC')}) • Antigravity",
+                            f"TARS ({pc_info.get('name', 'PC')}) - Antigravity",
                             latest_msg,
                             "/",
                             f"tars-step-{latest_idx}"
@@ -3031,7 +3118,7 @@ async def watch_transcript_for_push():
                     LAST_NOTIFIED_STEP["idx"] = latest_idx
                     await asyncio.to_thread(
                         send_web_push_all,
-                        "🤖 TARS • Antigravity",
+                        "TARS - Antigravity",
                         latest_msg,
                         "/",
                         f"tars-step-{latest_idx}"

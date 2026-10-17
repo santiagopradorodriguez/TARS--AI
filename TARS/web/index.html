@@ -6,15 +6,16 @@
     <meta name="theme-color" content="#0f1117">
     <title>TARS Movil</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/style.css?v=5.1">
+    <link rel="stylesheet" href="/static/style.css?v=5.2">
 </head>
 <body>
     <div class="app-container">
         <header class="app-header">
             <div class="header-top-row">
                 <div class="brand">
-                    <span class="status-indicator online"></span>
+                    <span id="connection-status-dot" class="status-indicator online"></span>
                     <h1>TARS</h1>
+                    <span id="network-latency-badge" class="network-latency-badge" title="Latencia en tiempo real con TARS">-- ms</span>
                 </div>
                 <div class="header-toggles">
                     <button id="pc-mode-btn" class="pc-mode-toggle-btn mode-auto" title="Cambiar modo de escucha de la PC (Verde: Hola TARS / Amarillo: F12 / Rojo: Silencio)" aria-label="Modo de escucha PC">

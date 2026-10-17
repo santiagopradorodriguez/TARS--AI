@@ -73,6 +73,61 @@ body {
     box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
 }
 
+.status-indicator.offline {
+    background-color: #ef4444;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+}
+
+.status-indicator.reconnecting {
+    background-color: #f59e0b;
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+    animation: pulse-recon 1.2s infinite ease-in-out;
+}
+
+@keyframes pulse-recon {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.35; transform: scale(0.85); }
+}
+
+.network-latency-badge {
+    font-size: 0.65rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    padding: 2px 7px;
+    border-radius: 9999px;
+    background-color: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text-muted);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    transition: all 0.25s ease;
+}
+
+.network-latency-badge.good {
+    color: #10b981;
+    border-color: rgba(16, 185, 129, 0.35);
+    background-color: rgba(16, 185, 129, 0.12);
+}
+
+.network-latency-badge.fair {
+    color: #f59e0b;
+    border-color: rgba(245, 158, 11, 0.35);
+    background-color: rgba(245, 158, 11, 0.12);
+}
+
+.network-latency-badge.poor {
+    color: #f97316;
+    border-color: rgba(249, 115, 22, 0.35);
+    background-color: rgba(249, 115, 22, 0.12);
+}
+
+.network-latency-badge.offline {
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.35);
+    background-color: rgba(239, 68, 68, 0.15);
+    animation: pulse-recon 1.5s infinite ease-in-out;
+}
+
 .connection-info {
     font-size: 0.85rem;
     color: var(--text-muted);
