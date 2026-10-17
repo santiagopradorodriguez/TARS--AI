@@ -1802,6 +1802,7 @@ async def handle_sync(request):
             "chat_changed": False,
             "pc_audio_muted": get_pc_sound_muted(),
             "mobile_voice_muted": get_mobile_voice_muted(),
+            "local_mode": get_connection_mode(),
             "active_pc": get_active_pc_info()
         })
 
@@ -1833,6 +1834,7 @@ async def handle_sync(request):
             "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
             "pc_audio_muted": get_pc_sound_muted(),
             "mobile_voice_muted": get_mobile_voice_muted(),
+            "local_mode": get_connection_mode(),
             "active_pc": get_active_pc_info()
         })
 
@@ -1846,6 +1848,7 @@ async def handle_sync(request):
         "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
         "pc_audio_muted": get_pc_sound_muted(),
         "mobile_voice_muted": get_mobile_voice_muted(),
+        "local_mode": get_connection_mode(),
         "active_pc": get_active_pc_info()
     })
 
@@ -2292,6 +2295,68 @@ async def handle_toggle_pc_sound(request):
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
+def get_connection_mode():
+    try:
+        st = _read_tars_state()
+        return bool(st.get("local_mode", True))
+    except Exception:
+        return True
+
+def set_connection_mode(local_mode):
+    try:
+        data = _read_tars_state()
+        data["local_mode"] = bool(local_mode)
+        with open(TARS_STATE_FILE, "w") as f:
+            json.dump(data, f)
+        return True
+    except Exception as e:
+        print(f"[TARS Web] Error guardando modo de conexion: {e}")
+        return False
+
+async def handle_get_connection_mode(request):
+    try:
+        local_mode = get_connection_mode()
+        loc_ip = get_local_ip()
+        ts_ip = get_tailscale_ip()
+        magic_dns = get_tailscale_magicdns()
+        port = 8443
+        local_url = f"https://{loc_ip}:{port}" if loc_ip else ""
+        tailscale_url = f"https://{magic_dns}:{port}" if magic_dns else (f"https://{ts_ip}:{port}" if ts_ip else "")
+        return web.json_response({
+            "success": True,
+            "local_mode": local_mode,
+            "local_ip": loc_ip,
+            "tailscale_ip": ts_ip,
+            "tailscale_magicdns": magic_dns,
+            "local_url": local_url,
+            "tailscale_url": tailscale_url
+        })
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+async def handle_set_connection_mode(request):
+    try:
+        body = await request.json()
+        local_mode = bool(body.get("local_mode", True))
+        ok = await asyncio.to_thread(set_connection_mode, local_mode)
+        loc_ip = get_local_ip()
+        ts_ip = get_tailscale_ip()
+        magic_dns = get_tailscale_magicdns()
+        port = 8443
+        local_url = f"https://{loc_ip}:{port}" if loc_ip else ""
+        tailscale_url = f"https://{magic_dns}:{port}" if magic_dns else (f"https://{ts_ip}:{port}" if ts_ip else "")
+        return web.json_response({
+            "success": ok,
+            "local_mode": local_mode,
+            "local_ip": loc_ip,
+            "tailscale_ip": ts_ip,
+            "tailscale_magicdns": magic_dns,
+            "local_url": local_url,
+            "tailscale_url": tailscale_url
+        })
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
 async def handle_get_chats(request):
     if is_remote_pc_active():
         rem_ip = get_active_pc_ip()
@@ -2651,7 +2716,18 @@ async def handle_cancel(request):
     return web.json_response(res)
 
 def init_app():
-    app = web.Application()
+    @web.middleware
+    async def cors_middleware(request, handler):
+        if request.method == "OPTIONS":
+            resp = web.Response(status=200)
+        else:
+            resp = await handler(request)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        return resp
+
+    app = web.Application(middlewares=[cors_middleware])
     app.router.add_get("/", handle_index)
     app.router.add_get("/sw.js", handle_sw)
     app.router.add_get("/manifest.json", handle_manifest)
@@ -2668,6 +2744,8 @@ def init_app():
     app.router.add_post("/api/switch_model", handle_switch_model)
     app.router.add_post("/api/toggle_pc_sound", handle_toggle_pc_sound)
     app.router.add_post("/api/toggle_mobile_voice", handle_toggle_mobile_voice)
+    app.router.add_get("/api/connection_mode", handle_get_connection_mode)
+    app.router.add_post("/api/connection_mode", handle_set_connection_mode)
     app.router.add_post("/api/test_notify", handle_test_notify)
     app.router.add_post("/api/cancel", handle_cancel)
     app.router.add_post("/api/chat", handle_chat)

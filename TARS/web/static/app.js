@@ -1125,6 +1125,224 @@ if (pcSoundToggleBtn) {
     });
 }
 
+// =========================================================================
+// SELECTOR DE RED: RED LOCAL WIFI VS TAILSCALE
+// =========================================================================
+const localModeToggleBtn = document.getElementById('local-mode-toggle-btn');
+const localModeBtnLabel = document.getElementById('local-mode-btn-label');
+const localModeModal = document.getElementById('local-mode-modal');
+const localModeModalOverlay = document.getElementById('local-mode-modal-overlay');
+const localModeModalClose = document.getElementById('local-mode-modal-close');
+const chooseLocalModeCard = document.getElementById('choose-local-mode-card');
+const chooseRemoteModeCard = document.getElementById('choose-remote-mode-card');
+const badgeLocalActive = document.getElementById('badge-local-active');
+const badgeRemoteActive = document.getElementById('badge-remote-active');
+const localModeCardDesc = document.getElementById('local-mode-card-desc');
+const remoteModeCardDesc = document.getElementById('remote-mode-card-desc');
+const localModeDirectLinkContainer = document.getElementById('local-mode-direct-link-container');
+const localModeDirectLink = document.getElementById('local-mode-direct-link');
+const localModeNoticeText = document.getElementById('local-mode-notice-text');
+
+let serverLocalIp = '';
+let serverTailscaleIp = '';
+let serverLocalUrl = '';
+let serverTailscaleUrl = '';
+
+function isConnectedViaLocalNetwork() {
+    const host = window.location.hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local')) {
+        return true;
+    }
+    if (/^192\.168\./.test(host) || /^10\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) {
+        return true;
+    }
+    return false;
+}
+
+function updateConnectionModeUI() {
+    const isLocal = isConnectedViaLocalNetwork();
+
+    if (localModeBtnLabel) {
+        localModeBtnLabel.innerText = isLocal ? 'LOCAL' : 'TAILSCALE';
+    }
+
+    if (localModeToggleBtn) {
+        if (isLocal) {
+            localModeToggleBtn.classList.remove('remote-active');
+            localModeToggleBtn.classList.add('local-active');
+            localModeToggleBtn.title = 'Conectado por Red Local WiFi (sin Tailscale)';
+        } else {
+            localModeToggleBtn.classList.remove('local-active');
+            localModeToggleBtn.classList.add('remote-active');
+            localModeToggleBtn.title = 'Conectado por Tailscale (toca para cambiar a Red Local)';
+        }
+    }
+
+    if (chooseLocalModeCard && chooseRemoteModeCard) {
+        if (isLocal) {
+            chooseLocalModeCard.classList.add('active');
+            chooseRemoteModeCard.classList.remove('active', 'remote-selected');
+        } else {
+            chooseLocalModeCard.classList.remove('active');
+            chooseRemoteModeCard.classList.add('active', 'remote-selected');
+        }
+    }
+}
+
+function openLocalModeModal() {
+    if (!localModeModal) return;
+    localModeModal.classList.remove('hidden');
+    updateConnectionModeUI();
+
+    const isLocal = isConnectedViaLocalNetwork();
+    if (localModeCardDesc && serverLocalIp) {
+        localModeCardDesc.innerText = `IP: ${serverLocalIp} • Conexión directa WiFi de tu casa`;
+    }
+    if (remoteModeCardDesc && (serverTailscaleIp || serverTailscaleUrl)) {
+        remoteModeCardDesc.innerText = `${serverTailscaleUrl ? serverTailscaleUrl.replace('https://', '') : serverTailscaleIp} • Acceso seguro remoto`;
+    }
+
+    if (localModeDirectLinkContainer && localModeDirectLink) {
+        if (!isLocal && serverLocalUrl) {
+            localModeDirectLinkContainer.classList.remove('hidden');
+            localModeDirectLink.href = serverLocalUrl;
+            localModeDirectLink.innerText = `Conectar directo a IP Local (${serverLocalIp})`;
+            if (localModeNoticeText) {
+                localModeNoticeText.innerText = 'Estás en Tailscale. Para usar WiFi de tu casa sin Tailscale:';
+            }
+        } else {
+            localModeDirectLinkContainer.classList.add('hidden');
+        }
+    }
+}
+
+function closeLocalModeModal() {
+    if (!localModeModal) return;
+    localModeModal.classList.add('hidden');
+}
+
+function switchToLocalNetwork() {
+    closeLocalModeModal();
+    if (isConnectedViaLocalNetwork()) {
+        showWhatsAppToast(
+            'Red Local activa',
+            'Ya estás conectado directamente a la red WiFi de tu casa sin usar Tailscale.'
+        );
+        return;
+    }
+    if (serverLocalUrl) {
+        showWhatsAppToast(
+            'Cambiando a Red Local...',
+            `Redirigiendo a ${serverLocalUrl} sin Tailscale`
+        );
+        setTimeout(() => {
+            window.location.href = serverLocalUrl;
+        }, 300);
+    } else {
+        const inputIp = prompt('Ingresa la IP local de tu PC en tu red WiFi:');
+        if (inputIp && inputIp.trim()) {
+            const cleanIp = inputIp.trim();
+            const newUrl = `https://${cleanIp}:${window.location.port || '8443'}`;
+            serverLocalIp = cleanIp;
+            serverLocalUrl = newUrl;
+            localStorage.setItem('tars_local_ip', cleanIp);
+            localStorage.setItem('tars_local_url', newUrl);
+            window.location.href = newUrl;
+        } else {
+            showWhatsAppToast(
+                'IP Local no configurada',
+                'No se pudo determinar la IP local para la redirección.'
+            );
+        }
+    }
+}
+
+function switchToTailscale() {
+    closeLocalModeModal();
+    if (!isConnectedViaLocalNetwork()) {
+        showWhatsAppToast(
+            'Tailscale activo',
+            'Ya estás conectado mediante la red segura de Tailscale.'
+        );
+        return;
+    }
+    if (serverTailscaleUrl) {
+        showWhatsAppToast(
+            'Cambiando a Tailscale...',
+            `Redirigiendo a ${serverTailscaleUrl}`
+        );
+        setTimeout(() => {
+            window.location.href = serverTailscaleUrl;
+        }, 300);
+    } else {
+        showWhatsAppToast(
+            'Tailscale no disponible',
+            'No se detectó dirección de Tailscale en el servidor.'
+        );
+    }
+}
+
+async function loadInitialConnectionMode() {
+    const cfg = window.TARS_CONNECTION_CONFIG || {};
+    serverLocalIp = localStorage.getItem('tars_local_ip') || cfg.local_ip || (isConnectedViaLocalNetwork() ? window.location.hostname : '');
+    serverTailscaleUrl = localStorage.getItem('tars_tailscale_url') || cfg.tailscale_url || (!isConnectedViaLocalNetwork() ? window.location.origin : '');
+    serverLocalUrl = localStorage.getItem('tars_local_url') || cfg.local_url || (isConnectedViaLocalNetwork() ? window.location.origin : (serverLocalIp ? `https://${serverLocalIp}:${window.location.port || '8443'}` : ''));
+
+    if (cfg.local_ip && !localStorage.getItem('tars_local_ip')) localStorage.setItem('tars_local_ip', cfg.local_ip);
+    if (cfg.local_url && !localStorage.getItem('tars_local_url')) localStorage.setItem('tars_local_url', cfg.local_url);
+    if (cfg.tailscale_url && !localStorage.getItem('tars_tailscale_url')) localStorage.setItem('tars_tailscale_url', cfg.tailscale_url);
+
+    updateConnectionModeUI();
+
+    try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2500);
+        const resp = await fetch('/api/connection_mode', { signal: controller.signal });
+        clearTimeout(timeoutId);
+        const data = await resp.json();
+        if (data && data.success) {
+            serverLocalIp = data.local_ip || serverLocalIp;
+            serverTailscaleIp = data.tailscale_ip || '';
+            serverLocalUrl = data.local_url || (serverLocalIp ? `https://${serverLocalIp}:8443` : serverLocalUrl);
+            serverTailscaleUrl = data.tailscale_url || serverTailscaleUrl;
+            if (serverLocalIp) localStorage.setItem('tars_local_ip', serverLocalIp);
+            if (serverLocalUrl) localStorage.setItem('tars_local_url', serverLocalUrl);
+            if (serverTailscaleUrl) localStorage.setItem('tars_tailscale_url', serverTailscaleUrl);
+            updateConnectionModeUI();
+        }
+    } catch (e) {
+        console.log('[TARS] Sin respuesta inicial del servidor, sugiriendo selector:', e);
+        // Si no pudo conectar con el servidor actual al iniciar, abrir directamente la pregunta
+        setTimeout(() => {
+            if (!currentSyncIndex && !activeChatId) {
+                openLocalModeModal();
+            }
+        }, 600);
+    }
+}
+
+if (localModeToggleBtn) {
+    localModeToggleBtn.addEventListener('click', openLocalModeModal);
+}
+if (localModeModalClose) {
+    localModeModalClose.addEventListener('click', closeLocalModeModal);
+}
+if (localModeModalOverlay) {
+    localModeModalOverlay.addEventListener('click', closeLocalModeModal);
+}
+if (chooseLocalModeCard) {
+    chooseLocalModeCard.addEventListener('click', switchToLocalNetwork);
+}
+if (chooseRemoteModeCard) {
+    chooseRemoteModeCard.addEventListener('click', switchToTailscale);
+}
+if (localModeDirectLink) {
+    localModeDirectLink.addEventListener('click', (e) => {
+        e.preventDefault();
+        switchToLocalNetwork();
+    });
+}
+
 // Selector de Chats de Antigravity
 const chatSelectorBtn = document.getElementById('chat-selector-btn');
 const currentChatTitle = document.getElementById('current-chat-title');
@@ -1424,7 +1642,7 @@ async function switchAntigravityModel(modelName, effort = null) {
         if (res && res.success) {
             const finalName = res.current_model || (effort ? `${modelName} ${effort}` : modelName);
             updateCurrentModelUI(finalName);
-            showWhatsAppToast('🧠 Modelo IA actualizado', `Ahora estás usando: ${finalName}`);
+            showWhatsAppToast('Modelo IA actualizado', `Ahora estás usando: ${finalName}`);
             micStatusLabel.innerText = 'Toca para hablar';
         } else {
             alert('No se pudo cambiar el modelo');
@@ -1569,8 +1787,8 @@ async function selectTargetPc(pc) {
             await loadInitialChatTitle();
             await syncWithAntigravity();
             showWhatsAppToast(
-                `💻 Conectado a ${res.active_pc.name}`,
-                `Ahora estás controlando Antigravity en ${res.active_pc.name} (${res.active_pc.ip})`
+                `Conectado a ${res.active_pc.name}`,
+                `Ahora estás controlando Antigravity en ${res.active_pc.name} - ${res.active_pc.ip}`
             );
             micStatusLabel.innerText = 'Toca para hablar';
         }
@@ -1603,7 +1821,7 @@ async function addCustomPc() {
                 syncWithAntigravity();
             }
             closePcsModal();
-            showWhatsAppToast(`💻 PC agregada`, `Conectado a ${data.active_pc ? data.active_pc.name : ipVal}`);
+            showWhatsAppToast(`PC agregada`, `Conectado a ${data.active_pc ? data.active_pc.name : ipVal}`);
         }
     } catch (e) {}
 }
@@ -1723,7 +1941,7 @@ if (waToastBanner) {
 
 async function triggerPhoneNotification(rawContent, customTitle = null, stepIndex = null) {
     const chatName = (currentChatTitle && currentChatTitle.innerText) ? currentChatTitle.innerText : 'Antigravity';
-    const title = customTitle || `🤖 TARS (${activePcName}) • ${chatName}`;
+    const title = customTitle || `TARS - ${activePcName} • ${chatName}`;
     const body = cleanPreviewText(rawContent);
 
     updateMediaSessionNotification(body);
@@ -1816,7 +2034,7 @@ async function activateNotificationsAndTest() {
 
     updateNotifyBtnUI(pushOk);
     showWhatsAppToast(
-        '🤖 TARS • Prueba en 5 seg',
+        'TARS • Prueba en 5 seg',
         'Salí de Chrome a la pantalla principal ahora: en 5 segundos te vibra y llega la notificación arriba.'
     );
     try {
@@ -1843,7 +2061,7 @@ if (waToastBanner) {
 if ('Notification' in window && Notification.permission !== 'granted') {
     setTimeout(() => {
         showWhatsAppToast(
-            '🔔 TOCA ACÁ PARA ACTIVAR ALERTAS',
+            'TOCA ACÁ PARA ACTIVAR ALERTAS',
             'Toca este cartel verde para habilitar las notificaciones y vibración de Android.'
         );
     }, 800);
@@ -1952,6 +2170,7 @@ async function syncWithAntigravity() {
 }
 
 loadInitialChatTitle();
+loadInitialConnectionMode();
 setInterval(syncWithAntigravity, 1500);
 syncWithAntigravity();
 

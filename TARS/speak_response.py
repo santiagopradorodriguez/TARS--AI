@@ -166,7 +166,13 @@ def main():
             pass
             
         payload = json.loads(input_data)
-        transcript_path = payload.get("transcriptPath")
+        transcript_path = payload.get("transcriptPath") or payload.get("transcript_path")
+        if not transcript_path or not os.path.exists(transcript_path):
+            convo_id = payload.get("conversationId") or payload.get("conversation_id")
+            if convo_id:
+                candidate = f"/home/santiago/.gemini/antigravity/brain/{convo_id}/.system_generated/logs/transcript.jsonl"
+                if os.path.exists(candidate):
+                    transcript_path = candidate
         if not transcript_path or not os.path.exists(transcript_path):
             print("{}")
             return

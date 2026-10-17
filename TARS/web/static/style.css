@@ -1404,4 +1404,135 @@ body {
     to { transform: rotate(360deg); }
 }
 
+/* Selector Modo Local vs Remoto */
+.pc-sound-toggle-btn.local-mode-btn {
+    background-color: rgba(255, 255, 255, 0.08);
+    border-color: var(--card-border);
+    color: var(--text-muted);
+}
+
+.pc-sound-toggle-btn.local-mode-btn.local-active {
+    background-color: rgba(16, 185, 129, 0.2);
+    border-color: rgba(16, 185, 129, 0.65);
+    color: #34d399;
+    box-shadow: 0 0 8px rgba(16, 185, 129, 0.25);
+}
+
+.pc-sound-toggle-btn.local-mode-btn.remote-active {
+    background-color: rgba(59, 130, 246, 0.2);
+    border-color: rgba(59, 130, 246, 0.65);
+    color: #60a5fa;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.25);
+}
+
+.connection-mode-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 14px 0 6px;
+}
+
+.connection-mode-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 13px 15px;
+    border-radius: 12px;
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--card-border);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    user-select: none;
+}
+
+.connection-mode-card:hover, .connection-mode-card:active {
+    background-color: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.25);
+}
+
+.connection-mode-card.active {
+    border-color: rgba(16, 185, 129, 0.7);
+    background-color: rgba(16, 185, 129, 0.12);
+}
+
+.connection-mode-card.remote-selected.active {
+    border-color: rgba(59, 130, 246, 0.7);
+    background-color: rgba(59, 130, 246, 0.12);
+}
+
+.mode-card-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.mode-card-icon.local-icon {
+    background-color: rgba(16, 185, 129, 0.18);
+    color: #34d399;
+}
+
+.mode-card-icon.remote-icon {
+    background-color: rgba(59, 130, 246, 0.18);
+    color: #60a5fa;
+}
+
+.mode-card-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.mode-card-title {
+    font-weight: 600;
+    font-size: 0.92rem;
+    color: var(--text-main);
+    margin-bottom: 2px;
+}
+
+.mode-card-desc {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    line-height: 1.35;
+}
+
+.mode-card-badge {
+    display: none;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: rgba(16, 185, 129, 0.25);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    letter-spacing: 0.03em;
+}
+
+.connection-mode-card.active .mode-card-badge {
+    display: inline-block;
+}
+
+.connection-mode-card.remote-selected.active .mode-card-badge {
+    background: rgba(59, 130, 246, 0.25);
+    color: #60a5fa;
+    border-color: rgba(59, 130, 246, 0.4);
+}
+
+.local-mode-notice {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background-color: rgba(255, 255, 255, 0.04);
+    border: 1px dashed var(--card-border);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+
 

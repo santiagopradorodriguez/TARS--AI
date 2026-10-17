@@ -1,0 +1,288 @@
+package com.tars.assistant
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.SharedPreferences
+import android.content.pm.PackageManager
+import android.net.http.SslError
+import android.os.Bundle
+import android.view.LayoutInflater
+import android.view.View
+import android.webkit.PermissionRequest
+import android.webkit.SslErrorHandler
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var webView: WebView
+    private lateinit var swipeRefresh: SwipeRefreshLayout
+    private lateinit var loadingLayout: LinearLayout
+    private lateinit var loadingText: TextView
+    private lateinit var prefs: SharedPreferences
+
+    private val activityScope = CoroutineScope(Dispatchers.Main + Job())
+    private val RECORD_AUDIO_PERMISSION_CODE = 101
+
+    companion object {
+        private const val PREFS_NAME = "tars_app_config"
+        private const val KEY_LOCAL_IP = "local_ip"
+        private const val KEY_TS_DOMAIN = "ts_domain"
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
+        prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+        webView = findViewById(R.id.webView)
+        swipeRefresh = findViewById(R.id.swipeRefresh)
+        loadingLayout = findViewById(R.id.loadingLayout)
+        loadingText = findViewById(R.id.loadingText)
+
+        setupWebView()
+        setupBackNavigation()
+        setupSwipeRefresh()
+        requestAppPermissions()
+
+        val savedLocal = prefs.getString(KEY_LOCAL_IP, "") ?: ""
+        val savedTs = prefs.getString(KEY_TS_DOMAIN, "") ?: ""
+
+        if (savedLocal.isBlank() && savedTs.isBlank()) {
+            showSettingsDialog(isFirstRun = true)
+        } else {
+            connectToBestNetwork(savedLocal, savedTs)
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun setupWebView() {
+        val s = webView.settings
+        s.javaScriptEnabled = true
+        s.domStorageEnabled = true
+        s.databaseEnabled = true
+        s.mediaPlaybackRequiresUserGesture = false
+        s.allowFileAccess = true
+        s.cacheMode = WebSettings.LOAD_DEFAULT
+        s.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        s.userAgentString = s.userAgentString + " TARS-Android-Shell/1.0"
+
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onPermissionRequest(request: PermissionRequest?) {
+                request?.let {
+                    val resources = it.resources
+                    for (r in resources) {
+                        if (r == PermissionRequest.RESOURCE_AUDIO_CAPTURE) {
+                            it.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
+                            return
+                        }
+                    }
+                    it.grant(resources)
+                }
+            }
+
+            override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                if (newProgress >= 85) {
+                    loadingLayout.visibility = View.GONE
+                    swipeRefresh.isRefreshing = false
+                }
+            }
+        }
+
+        webView.webViewClient = object : WebViewClient() {
+            @SuppressLint("WebViewClientOnReceivedSslError")
+            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                // Proceder en conexiones locales o seguras de TARS sin bloquear por certificado autofirmado
+                handler?.proceed()
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                super.onPageFinished(view, url)
+                loadingLayout.visibility = View.GONE
+                swipeRefresh.isRefreshing = false
+            }
+        }
+    }
+
+    private fun setupBackNavigation() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (webView.canGoBack()) {
+                    webView.goBack()
+                } else {
+                    showExitOrSettingsDialog()
+                }
+            }
+        })
+    }
+
+    private fun setupSwipeRefresh() {
+        swipeRefresh.setColorSchemeResources(R.color.primary)
+        swipeRefresh.setOnRefreshListener {
+            webView.reload()
+        }
+    }
+
+    private fun requestAppPermissions() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                RECORD_AUDIO_PERMISSION_CODE
+            )
+        }
+    }
+
+    private fun normalizeUrl(raw: String, defaultPort: Int = 8443): String {
+        var input = raw.trim().trimEnd('/')
+        if (input.isBlank()) return ""
+        if (!input.startsWith("http://") && !input.startsWith("https://")) {
+            input = "https://$input"
+        }
+        val uri = URL(input)
+        return if (uri.port == -1) {
+            "${uri.protocol}://${uri.host}:$defaultPort"
+        } else {
+            input
+        }
+    }
+
+    private fun connectToBestNetwork(localIp: String, tsDomain: String) {
+        val targetLocal = normalizeUrl(localIp)
+        val targetTs = normalizeUrl(tsDomain)
+
+        loadingLayout.visibility = View.VISIBLE
+        loadingText.text = getString(R.string.connecting)
+
+        activityScope.launch {
+            val chosenUrl = withContext(Dispatchers.IO) {
+                var canUseLocal = false
+                if (targetLocal.isNotBlank()) {
+                    canUseLocal = testEndpointReachable(targetLocal, timeoutMs = 450)
+                }
+                if (canUseLocal) {
+                    targetLocal
+                } else if (targetTs.isNotBlank()) {
+                    targetTs
+                } else {
+                    targetLocal
+                }
+            }
+
+            if (chosenUrl.isNotBlank()) {
+                webView.loadUrl(chosenUrl)
+            } else {
+                loadingLayout.visibility = View.GONE
+                showSettingsDialog(isFirstRun = true)
+            }
+        }
+    }
+
+    private fun testEndpointReachable(baseUrl: String, timeoutMs: Int): Boolean {
+        try {
+            val probeUrl = "$baseUrl/api/connection_mode"
+            val url = URL(probeUrl)
+            val conn = url.openConnection() as HttpURLConnection
+
+            if (conn is HttpsURLConnection) {
+                val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                    override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+                    override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+                })
+                val sc = SSLContext.getInstance("SSL")
+                sc.init(null, trustAllCerts, SecureRandom())
+                conn.sslSocketFactory = sc.socketFactory
+                conn.setHostnameVerifier { _, _ -> true }
+            }
+
+            conn.connectTimeout = timeoutMs
+            conn.readTimeout = timeoutMs
+            conn.requestMethod = "GET"
+            conn.instanceFollowRedirects = false
+            conn.connect()
+            val code = conn.responseCode
+            conn.disconnect()
+            return code in 200..399
+        } catch (e: Exception) {
+            return false
+        }
+    }
+
+    private fun showSettingsDialog(isFirstRun: Boolean = false) {
+        val inflater = LayoutInflater.from(this)
+        val dialogView = inflater.inflate(R.layout.dialog_settings, null)
+        val editLocal = dialogView.findViewById<EditText>(R.id.editLocalIp)
+        val editTs = dialogView.findViewById<EditText>(R.id.editTsDomain)
+
+        editLocal.setText(prefs.getString(KEY_LOCAL_IP, ""))
+        editTs.setText(prefs.getString(KEY_TS_DOMAIN, ""))
+
+        val builder = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.settings_title)
+            .setView(dialogView)
+            .setCancelable(!isFirstRun)
+            .setPositiveButton(R.string.btn_save) { dialog, _ ->
+                val newLocal = editLocal.text.toString().trim()
+                val newTs = editTs.text.toString().trim()
+
+                prefs.edit()
+                    .putString(KEY_LOCAL_IP, newLocal)
+                    .putString(KEY_TS_DOMAIN, newTs)
+                    .apply()
+
+                dialog.dismiss()
+                connectToBestNetwork(newLocal, newTs)
+            }
+
+        if (!isFirstRun) {
+            builder.setNegativeButton(R.string.btn_cancel) { dialog, _ ->
+                dialog.dismiss()
+            }
+        }
+
+        builder.show()
+    }
+
+    private fun showExitOrSettingsDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("TARS")
+            .setMessage("¿Deseas salir o reconfigurar las direcciones de red?")
+            .setPositiveButton("Salir") { _, _ ->
+                finish()
+            }
+            .setNeutralButton("Ajustes de Red") { _, _ ->
+                showSettingsDialog(isFirstRun = false)
+            }
+            .setNegativeButton("Continuar", null)
+            .show()
+    }
+}

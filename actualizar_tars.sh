@@ -28,6 +28,18 @@ cp "$REPO_DIR/TARS/web/sw.js" "$CONFIG_DIR/web/sw.js" 2>/dev/null || true
 cp "$REPO_DIR/TARS/web/manifest.json" "$CONFIG_DIR/web/manifest.json" 2>/dev/null || true
 cp -r "$REPO_DIR/TARS/web/static/." "$CONFIG_DIR/web/static/"
 
+# Generar configuracion de red dinamica en tiempo de ejecucion sin exponer IPs en Git
+LOCAL_DETECTED_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+TS_DETECTED_DNS=$(tailscale status --json 2>/dev/null | grep -o '"DNSName":"[^"]*' | head -n 1 | cut -d'"' -f4 | sed 's/\.$//')
+
+cat <<EOF > "$CONFIG_DIR/web/static/connection_config.js"
+window.TARS_CONNECTION_CONFIG = {
+    local_ip: "${LOCAL_DETECTED_IP}",
+    local_url: "https://${LOCAL_DETECTED_IP}:8443",
+    tailscale_url: "${TS_DETECTED_DNS:+https://${TS_DETECTED_DNS}:8443}"
+};
+EOF
+
 if sudo -n iptables -t nat -L PREROUTING -n 2>/dev/null | grep -q "8443"; then
     true
 else

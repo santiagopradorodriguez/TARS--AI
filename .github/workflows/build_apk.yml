@@ -1,0 +1,44 @@
+name: Build TARS Android APK
+
+on:
+  push:
+    paths:
+      - 'android/**'
+      - '.github/workflows/build_apk.yml'
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    name: Compilar APK Android
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Compilar APK Debug
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Renombrar APK para descarga directa
+        run: |
+          mkdir -p build_output
+          cp android/app/build/outputs/apk/debug/app-debug.apk build_output/TARS-Assistant.apk
+
+      - name: Subir APK como Artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: TARS-Assistant-APK
+          path: build_output/TARS-Assistant.apk
+          retention-days: 14

@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0f1117">
     <title>TARS Movil</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/style.css?v=4.5">
+    <link rel="stylesheet" href="/static/style.css?v=4.8">
 </head>
 <body>
     <div class="app-container">
@@ -17,6 +17,12 @@
                     <h1>TARS</h1>
                 </div>
                 <div class="header-toggles">
+                    <button id="local-mode-toggle-btn" class="pc-sound-toggle-btn local-mode-btn" title="Alternar entre Modo Local y Modo Remoto" aria-label="Modo de conexion">
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                            <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+                        </svg>
+                        <span id="local-mode-btn-label" class="pc-sound-label">LOCAL</span>
+                    </button>
                     <button id="pwa-install-btn" class="pc-sound-toggle-btn install-btn" title="Instalar TARS como App en tu celular" aria-label="Instalar App">
                         <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
                             <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
@@ -89,7 +95,11 @@
 
         <!-- Banner flotante de notificacion estilo WhatsApp -->
         <div id="wa-toast-banner" class="wa-toast-banner hidden">
-            <div class="wa-toast-icon">🤖</div>
+            <div class="wa-toast-icon">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+                </svg>
+            </div>
             <div class="wa-toast-body">
                 <div class="wa-toast-header">
                     <span id="wa-toast-title" class="wa-toast-title">TARS • Antigravity</span>
@@ -239,6 +249,54 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=4.5"></script>
+    <!-- Modal selector de Modo Local vs Remoto -->
+    <div id="local-mode-modal" class="chats-modal hidden">
+        <div class="chats-modal-overlay" id="local-mode-modal-overlay"></div>
+        <div class="chats-modal-card">
+            <div class="chats-modal-header">
+                <div class="modal-title-group">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                    </svg>
+                    <h3>Elegí tu conexión: Local o Tailscale</h3>
+                </div>
+                <button id="local-mode-modal-close" class="modal-close-btn" title="Cerrar">&times;</button>
+            </div>
+            <div class="connection-mode-options">
+                <div class="connection-mode-card" id="choose-local-mode-card">
+                    <div class="mode-card-icon local-icon">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                            <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+                        </svg>
+                    </div>
+                    <div class="mode-card-body">
+                        <div class="mode-card-title">Estoy en Red Local - En Casa</div>
+                        <div class="mode-card-desc" id="local-mode-card-desc">Conectar directo por WiFi de casa sin usar Tailscale.</div>
+                    </div>
+                    <div class="mode-card-badge" id="badge-local-active">Conectado</div>
+                </div>
+
+                <div class="connection-mode-card" id="choose-remote-mode-card">
+                    <div class="mode-card-icon remote-icon">
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                        </svg>
+                    </div>
+                    <div class="mode-card-body">
+                        <div class="mode-card-title">Tengo activado Tailscale - Fuera de Casa</div>
+                        <div class="mode-card-desc" id="remote-mode-card-desc">Conectar por la red privada de Tailscale.</div>
+                    </div>
+                    <div class="mode-card-badge" id="badge-remote-active">Conectado</div>
+                </div>
+            </div>
+            <div id="local-mode-direct-link-container" class="local-mode-notice hidden">
+                <span id="local-mode-notice-text">Estás conectado por Tailscale.</span>
+                <a id="local-mode-direct-link" href="#" class="quick-nav-btn">Conectar directo</a>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/connection_config.js"></script>
+    <script src="/static/app.js?v=4.8"></script>
 </body>
 </html>

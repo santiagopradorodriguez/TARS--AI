@@ -1,9 +1,31 @@
+const CACHE_NAME = 'tars-shell-v4.8';
+const PRECACHE_ASSETS = [
+    '/',
+    '/static/style.css?v=4.8',
+    '/static/app.js?v=4.8',
+    '/static/connection_config.js',
+    '/manifest.json',
+    '/static/icon-192.png'
+];
+
 self.addEventListener('install', (event) => {
-    self.skipWaiting();
+    event.waitUntil(
+        caches.open(CACHE_NAME).then((cache) => {
+            return cache.addAll(PRECACHE_ASSETS).catch((e) => {
+                console.log('[SW] Precache parcial:', e);
+            });
+        }).then(() => self.skipWaiting())
+    );
 });
 
 self.addEventListener('activate', (event) => {
-    event.waitUntil(self.clients.claim());
+    event.waitUntil(
+        caches.keys().then((keys) => {
+            return Promise.all(
+                keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
+            );
+        }).then(() => self.clients.claim())
+    );
 });
 
 self.addEventListener('fetch', (event) => {
@@ -13,11 +35,21 @@ self.addEventListener('fetch', (event) => {
     }
     if (event.request.method === 'GET') {
         event.respondWith(
-            fetch(event.request).catch(async () => {
-                const cached = await caches.match(event.request);
-                if (cached) return cached;
-                return new Response('Offline', { status: 503, statusText: 'Offline' });
-            })
+            fetch(event.request)
+                .then((response) => {
+                    if (response && response.status === 200) {
+                        const copy = response.clone();
+                        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+                    }
+                    return response;
+                })
+                .catch(async () => {
+                    const cached = await caches.match(event.request);
+                    if (cached) return cached;
+                    const indexCached = await caches.match('/');
+                    if (indexCached) return indexCached;
+                    return new Response('Offline', { status: 503, statusText: 'Offline' });
+                })
         );
     }
 });

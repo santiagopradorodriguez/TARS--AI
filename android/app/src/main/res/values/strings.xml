@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">TARS</string>
+    <string name="connecting">Conectando con TARS...</string>
+    <string name="settings_title">Configuración de Conexión</string>
+    <string name="hint_local_ip">IP Local de tu PC</string>
+    <string name="hint_ts_domain">Dominio o IP de Tailscale</string>
+    <string name="btn_save">Guardar y Conectar</string>
+    <string name="btn_cancel">Cancelar</string>
+</resources>
