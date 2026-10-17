@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0f1117">
     <title>TARS Movil</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/style.css?v=4.8">
+    <link rel="stylesheet" href="/static/style.css?v=5.0">
 </head>
 <body>
     <div class="app-container">
@@ -17,6 +17,16 @@
                     <h1>TARS</h1>
                 </div>
                 <div class="header-toggles">
+                    <button id="pc-mode-btn" class="pc-mode-toggle-btn mode-auto" title="Cambiar modo de escucha de la PC (Verde: Hola TARS / Amarillo: F12 / Rojo: Silencio)" aria-label="Modo de escucha PC">
+                        <span class="status-indicator online" id="pc-mode-indicator"></span>
+                        <span id="pc-mode-label">AUTO</span>
+                    </button>
+                    <button id="guide-btn" class="pc-sound-toggle-btn guide-btn" title="Guia e instrucciones para nuevos usuarios" aria-label="Ayuda">
+                        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
+                            <path d="M11 18h2v-2h-2v2zm1-16C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-2.21 0-4 1.79-4 4h2c0-1.1.9-2 2-2s2 .9 2 2c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5 0-2.21-1.79-4-4-4z"/>
+                        </svg>
+                        <span class="pc-sound-label">Guía</span>
+                    </button>
                     <button id="local-mode-toggle-btn" class="pc-sound-toggle-btn local-mode-btn" title="Alternar entre Modo Local y Modo Remoto" aria-label="Modo de conexion">
                         <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
                             <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
@@ -296,7 +306,48 @@
         </div>
     </div>
 
+    <!-- Modal Guia Rapida e Instrucciones para nuevos usuarios -->
+    <div id="guide-modal" class="chats-modal hidden">
+        <div class="chats-modal-overlay" id="guide-modal-overlay"></div>
+        <div class="chats-modal-card">
+            <div class="chats-modal-header">
+                <div class="modal-title-group">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H7c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.04-.42 1.99-1.07 2.75z"/>
+                    </svg>
+                    <h3>Guía de Inicio Rápido de TARS</h3>
+                </div>
+                <button id="guide-modal-close" class="modal-close-btn" title="Cerrar">&times;</button>
+            </div>
+            <div class="guide-modal-content">
+                <div class="guide-step">
+                    <h4>1. ¿Qué es TARS AI?</h4>
+                    <p>TARS es tu asistente de inteligencia artificial personal conectado a tu computadora Linux y al entorno de desarrollo Antigravity. Te permite hablar por voz, dictar código, ejecutar tareas y recibir respuestas con voz natural.</p>
+                </div>
+                <div class="guide-step">
+                    <h4>2. Conexión de tu Celular con la PC</h4>
+                    <p>Para conectar tu teléfono a tu computadora:</p>
+                    <p>• Asegúrate de que el servidor esté activo en tu PC corriendo: <span class="guide-code">systemctl --user start tars-web</span></p>
+                    <p>• Obtén la IP local de tu PC abriendo una terminal en Linux y ejecutando: <span class="guide-code">hostname -I</span></p>
+                    <p>• Si estás en la misma red Wi-Fi, tu IP suele ser algo como <span class="guide-code">192.168.1.X</span>. Ingrésala en la app en el puerto 8443.</p>
+                    <p>• Si estás fuera de tu casa, conéctate mediante tu IP o dominio de <strong>Tailscale</strong>.</p>
+                </div>
+                <div class="guide-step">
+                    <h4>3. Modos de Escucha en la PC</h4>
+                    <p>Puedes alternar los 3 modos tocando el botón <strong>AUTO / BOTON / MUTE</strong> en la barra superior:</p>
+                    <p>• <strong>Modo Verde (AUTO)</strong>: Manos libres continuo. Di <em>"Hola TARS"</em> en tu habitación y empezará a escucharte automáticamente.</p>
+                    <p>• <strong>Modo Amarillo (BOTON)</strong>: Modo Walkie-Talkie. Se activa presionando la tecla <span class="guide-code">F12</span> en la PC o el micrófono en la app.</p>
+                    <p>• <strong>Modo Rojo (MUTE)</strong>: Silencio total. Micrófonos de la PC cerrados para máxima privacidad.</p>
+                </div>
+                <div class="guide-step">
+                    <h4>4. Notificaciones y Audio</h4>
+                    <p>• Puedes silenciar la voz en la PC con el botón <strong>PC</strong> o la del celular con el botón <strong>Voz</strong>.</p>
+                    <p>• Activa el botón <strong>ON / Notificaciones</strong> para recibir avisos flotantes tipo WhatsApp cuando TARS termine de responderte.</p>
+                </div>
+            </div>
+        </div>
+    </div>
     <script src="/static/connection_config.js"></script>
-    <script src="/static/app.js?v=4.8"></script>
+    <script src="/static/app.js?v=5.0"></script>
 </body>
 </html>

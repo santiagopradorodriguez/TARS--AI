@@ -8,8 +8,9 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Ingresa los datos de conexión con tu PC. Se guardarán en tu teléfono de forma privada."
-        android:textSize="14sp"
+        android:text="Conecta TARS con tu computadora:\n\n1. En tu PC Linux, asegúrate de que TARS esté corriendo (servicio tars-web).\n2. Averigua tu IP local en la PC abriendo una terminal y escribiendo: hostname -I\n3. Ingresa esa IP en el campo de IP Local.\n4. (Opcional) Ingresa tu dominio de Tailscale si deseas conectarte fuera de tu casa."
+        android:textSize="13sp"
+        android:lineSpacingExtra="3dp"
         android:layout_marginBottom="16dp" />
 
     <com.google.android.material.textfield.TextInputLayout

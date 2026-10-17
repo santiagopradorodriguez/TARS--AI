@@ -72,15 +72,15 @@ def save_mode(mode):
     msg = ""
     if mode == "auto":
         sound = START_CHIME
-        msg = "🟢 Modo Escucha Automática"
+        msg = "Modo: Verde - Escucha Automatica"
     elif mode == "button":
         sound = END_CHIME
-        msg = "🟡 Modo Solo Botón (Push-To-Talk)"
+        msg = "Modo: Amarillo - Solo Boton F12"
     elif mode == "off":
         # Cortar inmediatamente cualquier reproducción de voz activa de TARS
         stop_all_speech()
         sound = CANCEL_TONE
-        msg = "🔴 TARS Apagado (Privacidad)"
+        msg = "Modo: Rojo - Silencio Total"
 
     os.system(f'notify-send "TARS" "{msg}" -t 2000')
 
@@ -121,17 +121,17 @@ class TarsTrayApp:
 
         self.group = QActionGroup(self.menu)
 
-        self.action_auto = QAction("🟢 Modo Automático (Hola TARS)", self.menu, checkable=True)
+        self.action_auto = QAction("Modo Verde: Automático (Hola TARS)", self.menu, checkable=True)
         self.action_auto.triggered.connect(lambda: self.switch_mode("auto"))
         self.group.addAction(self.action_auto)
         self.menu.addAction(self.action_auto)
 
-        self.action_button = QAction("🟡 Modo Solo Botón (F12)", self.menu, checkable=True)
+        self.action_button = QAction("Modo Amarillo: Solo Botón (F12)", self.menu, checkable=True)
         self.action_button.triggered.connect(lambda: self.switch_mode("button"))
         self.group.addAction(self.action_button)
         self.menu.addAction(self.action_button)
 
-        self.action_off = QAction("🔴 Apagar TARS (Desactivado)", self.menu, checkable=True)
+        self.action_off = QAction("Modo Rojo: Apagar TARS (Silencio)", self.menu, checkable=True)
         self.action_off.triggered.connect(lambda: self.switch_mode("off"))
         self.group.addAction(self.action_off)
         self.menu.addAction(self.action_off)
@@ -139,7 +139,7 @@ class TarsTrayApp:
         self.menu.addSeparator()
 
         # Submenú de Selección de Voz
-        self.voice_menu = self.menu.addMenu("🎙️ Voz de TARS")
+        self.voice_menu = self.menu.addMenu("Voz de TARS")
         self.voice_group = QActionGroup(self.voice_menu)
 
         self.action_voice_edge = QAction("Clásica (Tomás / Edge)", self.voice_menu, checkable=True)

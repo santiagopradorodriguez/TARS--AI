@@ -1802,6 +1802,7 @@ async def handle_sync(request):
             "chat_changed": False,
             "pc_audio_muted": get_pc_sound_muted(),
             "mobile_voice_muted": get_mobile_voice_muted(),
+            "tars_mode": get_tars_mode(),
             "local_mode": get_connection_mode(),
             "active_pc": get_active_pc_info()
         })
@@ -1834,6 +1835,7 @@ async def handle_sync(request):
             "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
             "pc_audio_muted": get_pc_sound_muted(),
             "mobile_voice_muted": get_mobile_voice_muted(),
+            "tars_mode": get_tars_mode(),
             "local_mode": get_connection_mode(),
             "active_pc": get_active_pc_info()
         })
@@ -1848,6 +1850,7 @@ async def handle_sync(request):
         "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
         "pc_audio_muted": get_pc_sound_muted(),
         "mobile_voice_muted": get_mobile_voice_muted(),
+        "tars_mode": get_tars_mode(),
         "local_mode": get_connection_mode(),
         "active_pc": get_active_pc_info()
     })
@@ -2278,6 +2281,64 @@ async def handle_toggle_mobile_voice(request):
             target_state = not curr
         await asyncio.to_thread(set_mobile_voice_muted, target_state)
         return web.json_response({"success": True, "mobile_voice_muted": target_state})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+def get_tars_mode():
+    try:
+        st = _read_tars_state()
+        return st.get("mode", "auto")
+    except Exception:
+        return "auto"
+
+def set_tars_mode(mode):
+    try:
+        if mode not in ("auto", "button", "off"):
+            mode = "auto"
+        _write_tars_state({"mode": mode})
+        mode_label = "Modo: Verde - Escucha Automatica" if mode == "auto" else ("Modo: Amarillo - Solo Boton F12" if mode == "button" else "Modo: Rojo - Silencio Total")
+        try:
+            subprocess.run(["notify-send", "TARS", mode_label, "-t", "2000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        print(f"[TARS Web] Error actualizando modo: {e}")
+        return False
+
+async def handle_get_mode(request):
+    try:
+        if is_remote_pc_active():
+            rem_ip = get_active_pc_ip()
+            rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/mode", "GET")
+            if isinstance(rem_res, dict) and "mode" in rem_res:
+                return web.json_response(rem_res)
+        return web.json_response({"success": True, "mode": get_tars_mode()})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+async def handle_set_mode(request):
+    try:
+        body = await request.json()
+        target_mode = str(body.get("mode") or "auto").strip().lower()
+        if is_remote_pc_active():
+            rem_ip = get_active_pc_ip()
+            rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/mode", "POST", {"mode": target_mode})
+            if isinstance(rem_res, dict) and "mode" in rem_res:
+                return web.json_response(rem_res)
+        await asyncio.to_thread(set_tars_mode, target_mode)
+        return web.json_response({"success": True, "mode": target_mode})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+async def handle_get_pc_sound(request):
+    try:
+        if is_remote_pc_active():
+            rem_ip = get_active_pc_ip()
+            rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/pc_sound", "GET")
+            if isinstance(rem_res, dict) and "pc_audio_muted" in rem_res:
+                return web.json_response(rem_res)
+        return web.json_response({"success": True, "pc_audio_muted": get_pc_sound_muted()})
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
@@ -2743,6 +2804,9 @@ def init_app():
     app.router.add_get("/api/models", handle_get_models)
     app.router.add_post("/api/switch_model", handle_switch_model)
     app.router.add_post("/api/toggle_pc_sound", handle_toggle_pc_sound)
+    app.router.add_get("/api/pc_sound", handle_get_pc_sound)
+    app.router.add_get("/api/mode", handle_get_mode)
+    app.router.add_post("/api/mode", handle_set_mode)
     app.router.add_post("/api/toggle_mobile_voice", handle_toggle_mobile_voice)
     app.router.add_get("/api/connection_mode", handle_get_connection_mode)
     app.router.add_post("/api/connection_mode", handle_set_connection_mode)

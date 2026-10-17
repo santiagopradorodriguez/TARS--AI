@@ -66,23 +66,30 @@ El script se encargará automáticamente de:
 
 ## Conexión desde el Celular
 
-### 1. Escaneo Rápido con Código QR
+### 1. App Nativa Oficial de Android (APK Firmado)
+La forma más cómoda y recomendada para usar TARS en tu teléfono Android:
+- Descargá el APK oficial firmado directamente desde [GitHub Releases](https://github.com/santiagopradorodriguez/TARS--AI/releases).
+- Instalá el archivo `TARS-Assistant.apk` en tu dispositivo Android.
+- Al abrirla por primera vez, te solicitará la IP local de tu PC (que podés consultar con `hostname -I` en tu terminal) o tu dominio de Tailscale.
+- Incluye soporte nativo de notificaciones flotantes con sonido y vibración estilo WhatsApp, control de micrófono y selección automática de red.
+
+### 2. Escaneo Rápido con Código QR (Navegador / PWA)
 Al finalizar la instalación (o cada vez que ejecutes TARS), la terminal imprimirá un código QR:
 - Abrí la cámara de tu celular (Android o iOS).
 - Apuntá al código QR que aparece en tu monitor.
-- Tocá el enlace para abrir la aplicación directamente.
+- Tocá el enlace para abrir la aplicación directamente en tu navegador o instalarla como PWA.
 
-### 2. Conexión 100% Privada con Tailscale y SSL Oficial (PWA 1-Click)
-Para que Chrome en Android permita instalar TARS como una aplicación nativa real (botón violeta "Instalar App") con candado verde sin advertencias de certificado:
+### 3. Conexión Privada con Tailscale y SSL Oficial (PWA 1-Click)
+Para que Chrome en Android permita instalar TARS como una aplicación web nativa con candado verde sin advertencias de certificado:
 
 1. Instalá [Tailscale](https://tailscale.com/download) en tu PC y en tu celular.
 2. En tu panel de administración web de Tailscale: [login.tailscale.com/admin/dns](https://login.tailscale.com/admin/dns), bajá hasta la sección **HTTPS Certificates** y hacé clic en **"Enable HTTPS"**.
-3. Ejecutá `./install.sh` (o `./actualizar_tars.sh`) en tu PC. TARS detectará automáticamente tu dominio MagicDNS y generará el certificado oficial de **Let's Encrypt**.
+3. Ejecutá `./install.sh` en tu PC. TARS detectará automáticamente tu dominio MagicDNS y generará el certificado oficial de **Let's Encrypt**.
 4. Abrí en tu celular tu dominio de Tailscale:
    ```text
    https://<tu-maquina>.<tu-red>.ts.net:8443
    ```
-5. Verás el candado verde 100% seguro y Chrome te ofrecerá instalar la app nativa en tu pantalla de inicio con 1 toque.
+5. Verás el candado verde 100% seguro y podrás usar TARS desde cualquier lugar fuera de tu casa.
 
 ---
 

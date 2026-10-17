@@ -34,11 +34,11 @@ def set_mode(mode):
         
     msg = ""
     if mode == "auto":
-        msg = "🟢 Modo Escucha Automática"
+        msg = "Modo: Verde - Escucha Automatica"
     elif mode == "button":
-        msg = "🟡 Modo Solo Botón (Push-To-Talk)"
+        msg = "Modo: Amarillo - Solo Boton F12"
     elif mode == "off":
-        msg = "🔴 TARS Apagado (Privacidad)"
+        msg = "Modo: Rojo - Silencio Total"
     
     os.system(f'notify-send "TARS" "{msg}" -t 2000')
 
@@ -140,7 +140,7 @@ def main():
         sys.exit(1)
         
     model = vosk.Model(MODEL_PATH)
-    wake_grammar = '["hola tas", "hola tarso", "hola tarde", "hola", "[unk]"]'
+    wake_grammar = '["hola tars", "hola tas", "hola tarso", "hola tarde", "hola tar", "hola dar", "hola ters", "hola tarts", "hola", "oye tars", "ey tars", "[unk]"]'
     wake_recognizer = vosk.KaldiRecognizer(model, 16000, wake_grammar)
     
     # Quitar la gramática restrictiva. Usar el vocabulario completo de Vosk.
@@ -153,7 +153,7 @@ def main():
         
         while True:
             now = time.time()
-            if now - last_check > 1.0:
+            if now - last_check > 0.5:
                 current_mode = get_mode()
                 last_check = now
                 
@@ -179,7 +179,8 @@ def main():
             if wake_recognizer.AcceptWaveform(bytes(data)):
                 res = json.loads(wake_recognizer.Result())
                 text = res.get("text", "").lower()
-                if any(k in text for k in ["hola tas", "hola tarso", "hola tarde"]):
+                targets = ["hola tars", "hola tas", "hola tarso", "hola tarde", "hola tar", "hola dar", "oye tars", "ey tars"]
+                if any(k in text for k in targets) or ("hola" in text and any(w in text for w in ["tar", "tas", "tarso", "tarde", "tars"])):
                     wake_recognizer.Reset()
                     handle_wake_and_auto_close(stream, close_recognizer)
                     time.sleep(1.0)

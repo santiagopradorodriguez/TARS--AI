@@ -50,8 +50,8 @@ jobs:
       - name: Publicar Release directa para celular
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.1
-          name: TARS Android v1.0.1 - Release Firmado
+          tag_name: v1.0.2
+          name: TARS Android v1.0.2 - Release Firmado
           draft: false
           prerelease: false
           files: build_output/TARS-Assistant.apk

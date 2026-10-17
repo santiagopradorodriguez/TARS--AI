@@ -1,4 +1,13 @@
 
+function scrollChatToBottom(force = false) {
+    if (!chatContainer) return;
+    const threshold = 180;
+    const isNearBottom = (chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight) <= threshold;
+    if (force || isNearBottom) {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+}
+
 function updateProcessingBubble(info) {
     let bubble = document.getElementById('processing-bubble');
     if (!bubble) {
@@ -16,19 +25,19 @@ function updateProcessingBubble(info) {
     if (Array.isArray(info.recent_steps) && info.recent_steps.length > 0) {
         const items = info.recent_steps.map((st, idx) => {
             const isLast = (idx === info.recent_steps.length - 1);
-            const icon = isLast ? '⏳' : '✅';
+            const icon = isLast ? '●' : '✓';
             return `<div class="proc-step-item ${isLast ? 'current' : 'done'}">${icon} ${escapeHtml(st)}</div>`;
         }).join('');
         stepsListHtml = `<div class="processing-thought-box">${items}</div>`;
     } else {
-        stepsListHtml = `<div class="processing-thought-box">⏳ ${actionText}</div>`;
+        stepsListHtml = `<div class="processing-thought-box">${actionText}</div>`;
     }
 
     bubble.innerHTML = `
         <div class="processing-card-header">
             <div class="processing-header-left">
                 <span class="processing-pulse"></span>
-                <span class="processing-title">🛠️ Laburando (Paso ${stepsCount})...</span>
+                <span class="processing-title">Laburando (Paso ${stepsCount})...</span>
             </div>
             <button class="proc-stop-inline-btn" onclick="window.cancelCurrentProcessing()" title="Cortar procesamiento de inmediato">
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
@@ -43,7 +52,7 @@ function updateProcessingBubble(info) {
         </div>
     `;
 
-    chatContainer.scrollTop = chatContainer.scrollHeight;
+    scrollChatToBottom(false);
 }
 
 function removeProcessingBubble() {
@@ -451,7 +460,7 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
 
     msgDiv.appendChild(contentDiv);
     chatContainer.appendChild(msgDiv);
-    chatContainer.scrollTop = chatContainer.scrollHeight;
+    scrollChatToBottom(sender === 'user');
 }
 
 // ===== MANEJO DE ARCHIVOS Y DOCUMENTOS ADJUNTOS =====
@@ -1124,6 +1133,88 @@ if (pcSoundToggleBtn) {
         }
     });
 }
+
+// =========================================================================
+// MODO DE ESCUCHA PC (VERDE / AMARILLO / ROJO)
+// =========================================================================
+const pcModeBtn = document.getElementById('pc-mode-btn');
+const pcModeIndicator = document.getElementById('pc-mode-indicator');
+const pcModeLabel = document.getElementById('pc-mode-label');
+let currentTarsMode = 'auto';
+
+function updatePcModeUI(mode) {
+    currentTarsMode = mode || 'auto';
+    if (!pcModeBtn || !pcModeLabel || !pcModeIndicator) return;
+
+    pcModeBtn.classList.remove('mode-auto', 'mode-button', 'mode-off');
+    pcModeIndicator.classList.remove('online', 'warning', 'offline');
+
+    if (currentTarsMode === 'auto') {
+        pcModeBtn.classList.add('mode-auto');
+        pcModeIndicator.classList.add('online');
+        pcModeLabel.textContent = 'AUTO';
+        pcModeBtn.title = 'Modo Verde: Escucha Automatica (Hola TARS). Toca para cambiar.';
+    } else if (currentTarsMode === 'button') {
+        pcModeBtn.classList.add('mode-button');
+        pcModeIndicator.classList.add('warning');
+        pcModeLabel.textContent = 'BOTON';
+        pcModeBtn.title = 'Modo Amarillo: Solo Tecla F12 / PTT. Toca para cambiar.';
+    } else {
+        pcModeBtn.classList.add('mode-off');
+        pcModeIndicator.classList.add('offline');
+        pcModeLabel.textContent = 'MUTE';
+        pcModeBtn.title = 'Modo Rojo: Silencio Total. Toca para cambiar.';
+    }
+}
+
+async function cycleTarsMode() {
+    const nextMode = currentTarsMode === 'auto' ? 'button' : (currentTarsMode === 'button' ? 'off' : 'auto');
+    updatePcModeUI(nextMode);
+    try {
+        const resp = await fetch('/api/mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: nextMode })
+        });
+        const data = await resp.json();
+        if (data && data.success && data.mode) {
+            updatePcModeUI(data.mode);
+        }
+    } catch (e) {
+        console.error('Error al cambiar modo de TARS:', e);
+    }
+}
+
+if (pcModeBtn) {
+    pcModeBtn.addEventListener('click', cycleTarsMode);
+}
+
+// =========================================================================
+// GUIA RAPIDA E INSTRUCCIONES
+// =========================================================================
+const guideBtn = document.getElementById('guide-btn');
+const guideModal = document.getElementById('guide-modal');
+const guideModalOverlay = document.getElementById('guide-modal-overlay');
+const guideModalClose = document.getElementById('guide-modal-close');
+
+function showGuideModal() {
+    if (guideModal) guideModal.classList.remove('hidden');
+}
+
+function hideGuideModal() {
+    if (guideModal) guideModal.classList.add('hidden');
+}
+
+if (guideBtn) guideBtn.addEventListener('click', showGuideModal);
+if (guideModalClose) guideModalClose.addEventListener('click', hideGuideModal);
+if (guideModalOverlay) guideModalOverlay.addEventListener('click', hideGuideModal);
+
+try {
+    if (!localStorage.getItem('tars_guide_seen_v1')) {
+        setTimeout(showGuideModal, 800);
+        localStorage.setItem('tars_guide_seen_v1', 'true');
+    }
+} catch (e) {}
 
 // =========================================================================
 // SELECTOR DE RED: RED LOCAL WIFI VS TAILSCALE
@@ -1958,6 +2049,14 @@ async function triggerPhoneNotification(rawContent, customTitle = null, stepInde
     }
     showWhatsAppToast(title, body);
 
+    if (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function') {
+        try {
+            window.AndroidBridge.showNotification(title, body);
+        } catch (e) {
+            console.warn('Error despachando notificacion por AndroidBridge:', e);
+        }
+    }
+
     if (isPushSubscribed) {
         return;
     }
@@ -2107,6 +2206,10 @@ async function syncWithAntigravity() {
 
         if (typeof data.mobile_voice_muted === 'boolean' && data.mobile_voice_muted !== isMobileVoiceMuted) {
             updateMobileVoiceUI(data.mobile_voice_muted);
+        }
+
+        if (data.tars_mode && data.tars_mode !== currentTarsMode) {
+            updatePcModeUI(data.tars_mode);
         }
 
         if (data.processing_info && data.processing_info.is_processing) {
