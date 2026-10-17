@@ -29,8 +29,16 @@ def get_mode():
     return "auto"
 
 def set_mode(mode):
-    with open(STATE_FILE, "w") as f:
-        json.dump({"mode": mode}, f)
+    try:
+        data = {}
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+        data["mode"] = mode
+        with open(STATE_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
         
     msg = ""
     if mode == "auto":
@@ -82,9 +90,16 @@ def handle_wake_and_auto_close(stream, close_recognizer):
     close_recognizer.Reset()
     
     start_time = time.time()
+    last_speech_time = None
+    spoken_any_word = False
     action = None
     
     while True:
+        # Si el usuario cambio de modo fuera de auto (ej. amarillo o rojo), cancelar inmediatamente
+        if get_mode() != "auto":
+            action = "cancel"
+            break
+
         if os.path.exists(LOCK_FILE):
             time.sleep(0.15)
             close_recognizer.Reset()
@@ -93,32 +108,46 @@ def handle_wake_and_auto_close(stream, close_recognizer):
         data, overflowed = stream.read(4000)
         now = time.time()
         
+        has_new_text = False
+        words = []
         if close_recognizer.AcceptWaveform(bytes(data)):
             res = json.loads(close_recognizer.Result())
-            words = res.get("text", "").lower().split()
-            
+            raw_text = res.get("text", "").lower()
+            words = raw_text.split()
+            if words:
+                has_new_text = True
+        else:
+            pres = json.loads(close_recognizer.PartialResult())
+            raw_text = pres.get("partial", "").lower()
+            words = raw_text.split()
+            if words:
+                has_new_text = True
+
+        if has_new_text and words:
             if any(w in words for w in ["enviar", "envía", "envia", "cambio", "mandar", "listo"]):
                 action = "send"
                 break
             elif "cancelar" in words:
                 action = "cancel"
                 break
-        else:
-            # Detección inmediata si la última palabra hablada es de envío o cancelación
-            pres = json.loads(close_recognizer.PartialResult())
-            pwords = pres.get("partial", "").lower().split()
-            if pwords:
-                last_w = pwords[-1]
-                if last_w in ["enviar", "envía", "envia", "cambio", "mandar"]:
-                    action = "send"
-                    break
-                elif last_w == "cancelar":
-                    action = "cancel"
-                    break
-                
-        # Límite amplio de 10 minutos (600s) para mensajes largos
-        if now - start_time > 600.0:
-            action = "timeout"
+            else:
+                spoken_any_word = True
+                last_speech_time = now
+
+        # Deteccion de silencio post-dictado:
+        # Si el usuario ya hablo su mensaje y hubo 2.2 segundos de silencio, enviar automaticamente
+        if spoken_any_word and last_speech_time and (now - last_speech_time > 2.2):
+            action = "send"
+            break
+
+        # Si pasaron 6 segundos desde el Hola TARS y no se detecto ninguna palabra hablada, cancelar
+        if not spoken_any_word and (now - start_time > 6.0):
+            action = "cancel"
+            break
+
+        # Limite maximo razonable para dictados continuos: 60 segundos
+        if now - start_time > 60.0:
+            action = "send" if spoken_any_word else "cancel"
             break
                 
     time.sleep(0.15)
@@ -132,7 +161,7 @@ def handle_wake_and_auto_close(stream, close_recognizer):
     elif action == "cancel":
         if os.path.exists(CANCEL_TONE):
             subprocess.Popen(["paplay", CANCEL_TONE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        print("Dictado cancelado.")
+        print("Dictado cerrado o cancelado.")
 
 def main():
     vosk.SetLogLevel(-1)
@@ -140,35 +169,46 @@ def main():
         sys.exit(1)
         
     model = vosk.Model(MODEL_PATH)
-    wake_grammar = '["hola tars", "hola tas", "hola tarso", "hola tarde", "hola tar", "hola dar", "hola ters", "hola tarts", "hola", "oye tars", "ey tars", "[unk]"]'
+    wake_grammar = '["hola tars", "hola tas", "hola tarso", "hola tarde", "hola tar", "hola dar", "hola ters", "hola tarts", "hola", "oye tars", "ey tars", "tars", "[unk]"]'
     wake_recognizer = vosk.KaldiRecognizer(model, 16000, wake_grammar)
     
-    # Quitar la gramática restrictiva. Usar el vocabulario completo de Vosk.
-    # Así evitamos que cualquier ruido se fuerce a ser "enviar" o "cancelar".
     close_recognizer = vosk.KaldiRecognizer(model, 16000)
 
     with sd.RawInputStream(samplerate=16000, blocksize=4000, dtype='int16', channels=1) as stream:
         last_check = 0
         current_mode = "auto"
+        prev_mode = "auto"
         
         while True:
             now = time.time()
-            if now - last_check > 0.5:
+            if now - last_check > 0.3:
                 current_mode = get_mode()
                 last_check = now
                 
             if current_mode != "auto":
+                prev_mode = current_mode
                 try:
-                    data, _ = stream.read(4000)
+                    while stream.read_available > 0:
+                        stream.read(min(stream.read_available, 4000))
                 except Exception:
                     pass
                 wake_recognizer.Reset()
-                time.sleep(0.1)
+                time.sleep(0.15)
                 continue
                 
+            if prev_mode != "auto":
+                try:
+                    while stream.read_available > 0:
+                        stream.read(min(stream.read_available, 4000))
+                except Exception:
+                    pass
+                wake_recognizer.Reset()
+                prev_mode = "auto"
+
             if os.path.exists(LOCK_FILE):
                 try:
-                    data, _ = stream.read(4000)
+                    while stream.read_available > 0:
+                        stream.read(min(stream.read_available, 4000))
                 except Exception:
                     pass
                 time.sleep(0.15)
@@ -176,14 +216,25 @@ def main():
                 continue
                 
             data, overflowed = stream.read(4000)
+            
+            text = ""
             if wake_recognizer.AcceptWaveform(bytes(data)):
                 res = json.loads(wake_recognizer.Result())
                 text = res.get("text", "").lower()
-                targets = ["hola tars", "hola tas", "hola tarso", "hola tarde", "hola tar", "hola dar", "oye tars", "ey tars"]
-                if any(k in text for k in targets) or ("hola" in text and any(w in text for w in ["tar", "tas", "tarso", "tarde", "tars"])):
+            else:
+                pres = json.loads(wake_recognizer.PartialResult())
+                text = pres.get("partial", "").lower()
+
+            if text:
+                targets = ["hola tars", "hola tas", "hola tarso", "hola tarde", "hola tar", "hola dar", "hola ters", "hola tarts", "oye tars", "ey tars", "tars"]
+                if any(k in text for k in targets) or ("hola" in text and any(w in text for w in ["tar", "tas", "tarso", "tarde", "tars", "ter"])):
                     wake_recognizer.Reset()
                     handle_wake_and_auto_close(stream, close_recognizer)
-                    time.sleep(1.0)
+                    try:
+                        while stream.read_available > 0:
+                            stream.read(min(stream.read_available, 4000))
+                    except Exception:
+                        pass
                     wake_recognizer.Reset()
 
 if __name__ == "__main__":

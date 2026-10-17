@@ -36,16 +36,24 @@ def get_mode():
     return "auto"
 
 def set_mode(mode):
-    with open(STATE_FILE, "w") as f:
-        json.dump({"mode": mode}, f)
+    try:
+        data = {}
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+        data["mode"] = mode
+        with open(STATE_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
     
     msg = ""
     if mode == "auto":
-        msg = "🟢 Modo Escucha Automática"
+        msg = "Modo: Verde - Escucha Automatica"
     elif mode == "button":
-        msg = "🟡 Modo Solo Botón (Push-To-Talk)"
+        msg = "Modo: Amarillo - Solo Boton F12"
     elif mode == "off":
-        msg = "🔴 TARS Apagado (Privacidad)"
+        msg = "Modo: Rojo - Silencio Total"
     
     os.system(f'notify-send "TARS" "{msg}" -t 2000')
 

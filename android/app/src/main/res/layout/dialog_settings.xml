@@ -1,44 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:padding="20dp">
+    android:layout_height="wrap_content">
 
-    <TextView
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Conecta TARS con tu computadora:\n\n1. En tu PC Linux, asegúrate de que TARS esté corriendo (servicio tars-web).\n2. Averigua tu IP local en la PC abriendo una terminal y escribiendo: hostname -I\n3. Ingresa esa IP en el campo de IP Local.\n4. (Opcional) Ingresa tu dominio de Tailscale si deseas conectarte fuera de tu casa."
-        android:textSize="13sp"
-        android:lineSpacingExtra="3dp"
-        android:layout_marginBottom="16dp" />
+        android:orientation="vertical"
+        android:padding="20dp">
 
-    <com.google.android.material.textfield.TextInputLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="@string/hint_local_ip"
-        android:layout_marginBottom="12dp">
-
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/editLocalIp"
+        <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:inputType="textUri" />
+            android:text="Configura la conexión con tu PC:\n\n• Opción A - Red Local Wi-Fi (En tu casa u oficina):\n1. En tu PC Linux abre la terminal y escribe: hostname -I\n2. Ingresa esa IP (ej. 192.168.1.50) en el campo IP Local.\n\n• Opción B - Tailscale (Conexión remota por datos o fuera de casa):\n1. Instala Tailscale en tu PC y en tu celular.\n2. En tu PC abre la terminal y escribe: tailscale ip -4\n3. Ingresa esa IP (ej. 100.x.y.z) en el campo Dominio / IP Tailscale.\n\nNota: La app conecta automáticamente al puerto seguro 8443."
+            android:textSize="12sp"
+            android:lineSpacingExtra="2dp"
+            android:layout_marginBottom="16dp" />
 
-    </com.google.android.material.textfield.TextInputLayout>
-
-    <com.google.android.material.textfield.TextInputLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:hint="@string/hint_ts_domain"
-        android:layout_marginBottom="8dp">
-
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/editTsDomain"
+        <com.google.android.material.textfield.TextInputLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:inputType="textUri" />
+            android:hint="@string/hint_local_ip"
+            android:layout_marginBottom="12dp">
 
-    </com.google.android.material.textfield.TextInputLayout>
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/editLocalIp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textUri" />
 
-</LinearLayout>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/hint_ts_domain"
+            android:layout_marginBottom="8dp">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/editTsDomain"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textUri" />
+
+        </com.google.android.material.textfield.TextInputLayout>
+
+    </LinearLayout>
+</ScrollView>

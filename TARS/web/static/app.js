@@ -167,7 +167,7 @@ function updateMediaSessionNotification(textPreview) {
                 : 'Antigravity';
             navigator.mediaSession.metadata = new MediaMetadata({
                 title: textPreview || 'TARS Conectado en segundo plano',
-                artist: `🤖 TARS • ${chatName}`,
+                artist: `TARS • ${chatName}`,
                 album: 'Antigravity Móvil',
                 artwork: [
                     { src: '/static/icon-192.png', sizes: '192x192', type: 'image/png' },
@@ -827,7 +827,7 @@ if (mobileVoiceToggleBtn) {
         const nextMuted = !isMobileVoiceMuted;
         updateMobileVoiceUI(nextMuted);
         showWhatsAppToast(
-            nextMuted ? '🔇 Voz del celular desactivada' : '🔊 Voz del celular activada',
+            nextMuted ? 'Voz del celular desactivada' : 'Voz del celular activada',
             nextMuted ? 'No te hablaré en voz alta cuando lleguen mensajes.' : 'Volveré a leerte las respuestas por voz.'
         );
         try {
@@ -851,6 +851,13 @@ const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRe
 let wakeRecognizer = null;
 let wakeRestartTimer = null;
 let isRecognizingWakeWord = false;
+
+function hasSpeechRecognitionSupport() {
+    if (window.AndroidBridge && typeof window.AndroidBridge.isSpeechAvailable === 'function') {
+        return window.AndroidBridge.isSpeechAvailable();
+    }
+    return Boolean(SpeechRecognitionClass);
+}
 
 function playWakeWordChime() {
     try {
@@ -895,8 +902,18 @@ function updateWakeWordUI(active) {
 }
 
 function startWakeWordListening() {
+    if (!isWakeWordActive || isRecording) return;
+
+    // 1. AndroidBridge nativo dentro de la App APK
+    if (window.AndroidBridge && typeof window.AndroidBridge.startWakeWord === 'function') {
+        window.AndroidBridge.startWakeWord();
+        isRecognizingWakeWord = true;
+        return;
+    }
+
+    // 2. Web Speech API (Navegadores Chrome)
     if (!SpeechRecognitionClass) return;
-    if (!isWakeWordActive || isRecording || isRecognizingWakeWord) return;
+    if (isRecognizingWakeWord) return;
 
     try {
         if (!wakeRecognizer) {
@@ -915,20 +932,7 @@ function startWakeWordListening() {
                     // Detectar "hola tars" o variantes comunes ("hola tax", "hola tar", "tars", "che tars", "oye tars")
                     const match = transcript.match(/\b(?:hola\s+|che\s+|oye\s+|ey\s+)?(?:tars|tax|tar|tor|star|task)\b(.*)/i);
                     if (match) {
-                        console.log('[TARS WakeWord] Trigger detectado:', transcript);
-                        if (navigator.vibrate) navigator.vibrate([60, 50, 100]);
-                        playWakeWordChime();
-
-                        stopWakeWordListening();
-
-                        const command = (match[1] || '').trim();
-                        if (command && command.length > 3) {
-                            if (micStatusLabel) micStatusLabel.innerText = 'Comando: ' + command;
-                            sendTextMessage(command);
-                        } else {
-                            if (micStatusLabel) micStatusLabel.innerText = 'Hola TARS detectado // Grabando...';
-                            startRecording();
-                        }
+                        window.onNativeWakeWordDetected((match[1] || '').trim());
                         break;
                     }
                 }
@@ -962,6 +966,11 @@ function stopWakeWordListening() {
         clearTimeout(wakeRestartTimer);
         wakeRestartTimer = null;
     }
+    if (window.AndroidBridge && typeof window.AndroidBridge.stopWakeWord === 'function') {
+        try {
+            window.AndroidBridge.stopWakeWord();
+        } catch (e) {}
+    }
     if (wakeRecognizer && isRecognizingWakeWord) {
         try {
             wakeRecognizer.stop();
@@ -978,12 +987,30 @@ function scheduleWakeWordRestart(delayMs) {
     }, delayMs || 600);
 }
 
+// Callback universal para deteccion de palabra clave (App nativa o Web Speech)
+window.onNativeWakeWordDetected = function(command) {
+    if (!isWakeWordActive || isRecording) return;
+    console.log('[TARS WakeWord] Trigger detectado:', command);
+    if (navigator.vibrate) navigator.vibrate([60, 50, 100]);
+    playWakeWordChime();
+
+    stopWakeWordListening();
+
+    if (command && command.length > 2) {
+        if (micStatusLabel) micStatusLabel.innerText = 'Comando: ' + command;
+        sendTextMessage(command);
+    } else {
+        if (micStatusLabel) micStatusLabel.innerText = 'Hola TARS detectado - Grabando...';
+        startRecording();
+    }
+};
+
 updateWakeWordUI(isWakeWordActive);
 
 if (wakeWordToggleBtn) {
     wakeWordToggleBtn.addEventListener('click', () => {
-        if (!SpeechRecognitionClass) {
-            alert('Tu navegador en este dispositivo no soporta Web Speech API para escucha continua.');
+        if (!hasSpeechRecognitionSupport()) {
+            showWhatsAppToast('Hola TARS no disponible', 'Este navegador no tiene soporte de reconocimiento de voz. Usa la App de TARS o el botón de micrófono.');
             return;
         }
         if (navigator.vibrate) navigator.vibrate(40);
@@ -994,7 +1021,7 @@ if (wakeWordToggleBtn) {
             showWhatsAppToast('Escucha manos libres activa', 'Di "Hola TARS" en cualquier momento para hablar.');
         } else {
             stopWakeWordListening();
-            showWhatsAppToast('Escucha manos libres apagada', 'Usa el boton de microfono para hablar.');
+            showWhatsAppToast('Escucha manos libres apagada', 'Usa el botón de micrófono para hablar.');
         }
     });
 }

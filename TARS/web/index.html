@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0f1117">
     <title>TARS Movil</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/style.css?v=5.0">
+    <link rel="stylesheet" href="/static/style.css?v=5.1">
 </head>
 <body>
     <div class="app-container">
@@ -325,12 +325,16 @@
                     <p>TARS es tu asistente de inteligencia artificial personal conectado a tu computadora Linux y al entorno de desarrollo Antigravity. Te permite hablar por voz, dictar código, ejecutar tareas y recibir respuestas con voz natural.</p>
                 </div>
                 <div class="guide-step">
-                    <h4>2. Conexión de tu Celular con la PC</h4>
-                    <p>Para conectar tu teléfono a tu computadora:</p>
-                    <p>• Asegúrate de que el servidor esté activo en tu PC corriendo: <span class="guide-code">systemctl --user start tars-web</span></p>
-                    <p>• Obtén la IP local de tu PC abriendo una terminal en Linux y ejecutando: <span class="guide-code">hostname -I</span></p>
-                    <p>• Si estás en la misma red Wi-Fi, tu IP suele ser algo como <span class="guide-code">192.168.1.X</span>. Ingrésala en la app en el puerto 8443.</p>
-                    <p>• Si estás fuera de tu casa, conéctate mediante tu IP o dominio de <strong>Tailscale</strong>.</p>
+                    <h4>2. Conexión de tu Celular con la PC - Red Local y Tailscale</h4>
+                    <p>Asegúrate de que el servidor TARS esté activo en tu PC: <span class="guide-code">systemctl --user start tars-web</span></p>
+                    <p><strong>• Opción 1: Red Local Wi-Fi (en tu casa u oficina)</strong></p>
+                    <p>1. Conecta tu celular al mismo Wi-Fi de tu casa.</p>
+                    <p>2. En tu PC Linux abre la terminal y escribe: <span class="guide-code">hostname -I</span></p>
+                    <p>3. Abre en tu celular: <span class="guide-code">https://tu-ip:8443</span> (ej. <em>https://192.168.1.50:8443</em>). En el primer ingreso, pulsa "Configuración avanzada" &gt; "Acceder de todos modos" para autorizar el certificado SSL local.</p>
+                    <p><strong>• Opción 2: Tailscale (conexión remota segura desde cualquier lugar)</strong></p>
+                    <p>1. Instala Tailscale en tu PC y en tu celular (gratuito) e inicia sesión con la misma cuenta.</p>
+                    <p>2. En tu PC escribe en la terminal: <span class="guide-code">tailscale ip -4</span> (ej. <em>100.x.y.z</em>).</p>
+                    <p>3. En tu celular entra a: <span class="guide-code">https://100.x.y.z:8443</span>. ¡Listo! Podrás usar TARS por datos móviles o fuera de tu casa.</p>
                 </div>
                 <div class="guide-step">
                     <h4>3. Modos de Escucha en la PC</h4>
@@ -348,6 +352,6 @@
         </div>
     </div>
     <script src="/static/connection_config.js"></script>
-    <script src="/static/app.js?v=5.0"></script>
+    <script src="/static/app.js?v=5.1"></script>
 </body>
 </html>

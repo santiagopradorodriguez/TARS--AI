@@ -40,6 +40,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.webkit.JavascriptInterface
 import androidx.core.app.NotificationCompat
 import javax.net.ssl.HttpsURLConnection
@@ -54,6 +59,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var loadingLayout: LinearLayout
     private lateinit var loadingText: TextView
     private lateinit var prefs: SharedPreferences
+
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var recognitionIntent: Intent? = null
+    private var isWakeWordListening = false
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val activityScope = CoroutineScope(Dispatchers.Main + Job())
     private val RECORD_AUDIO_PERMISSION_CODE = 101
@@ -186,6 +196,109 @@ class MainActivity : AppCompatActivity() {
                 triggerNativeNotification(title, message)
             }
         }
+
+        @JavascriptInterface
+        fun isSpeechAvailable(): Boolean {
+            return SpeechRecognizer.isRecognitionAvailable(context)
+        }
+
+        @JavascriptInterface
+        fun startWakeWord(): Boolean {
+            runOnUiThread {
+                startNativeWakeWord()
+            }
+            return true
+        }
+
+        @JavascriptInterface
+        fun stopWakeWord(): Boolean {
+            runOnUiThread {
+                stopNativeWakeWord()
+            }
+            return true
+        }
+    }
+
+    private fun initNativeSpeechRecognizer() {
+        if (speechRecognizer != null) return
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) return
+
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {}
+                override fun onError(error: Int) {
+                    if (isWakeWordListening) {
+                        mainHandler.postDelayed({
+                            if (isWakeWordListening) {
+                                try {
+                                    speechRecognizer?.startListening(recognitionIntent)
+                                } catch (e: Exception) {}
+                            }
+                        }, 500)
+                    }
+                }
+                override fun onResults(results: Bundle?) {
+                    handleSpeechRecognition(results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION), isFinal = true)
+                }
+                override fun onPartialResults(partialResults: Bundle?) {
+                    handleSpeechRecognition(partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION), isFinal = false)
+                }
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+        }
+
+        recognitionIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "es-AR")
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+        }
+    }
+
+    private fun handleSpeechRecognition(matches: ArrayList<String>?, isFinal: Boolean) {
+        if (matches.isNullOrEmpty() || !isWakeWordListening) return
+        for (phrase in matches) {
+            val lower = phrase.lowercase().trim()
+            val regex = Regex("""\b(?:hola\s+|che\s+|oye\s+|ey\s+)?(?:tars|tas|tar|tor|star|task)\b(.*)""", RegexOption.IGNORE_CASE)
+            val match = regex.find(lower)
+            if (match != null) {
+                val command = match.groupValues.getOrNull(1)?.trim() ?: ""
+                val escaped = command.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"").replace("\n", " ")
+                stopNativeWakeWord()
+                webView.post {
+                    webView.evaluateJavascript("window.onNativeWakeWordDetected('$escaped');", null)
+                }
+                return
+            }
+        }
+        if (isFinal && isWakeWordListening) {
+            mainHandler.postDelayed({
+                if (isWakeWordListening) {
+                    try {
+                        speechRecognizer?.startListening(recognitionIntent)
+                    } catch (e: Exception) {}
+                }
+            }, 350)
+        }
+    }
+
+    private fun startNativeWakeWord() {
+        isWakeWordListening = true
+        initNativeSpeechRecognizer()
+        try {
+            speechRecognizer?.startListening(recognitionIntent)
+        } catch (e: Exception) {}
+    }
+
+    private fun stopNativeWakeWord() {
+        isWakeWordListening = false
+        try {
+            speechRecognizer?.stopListening()
+        } catch (e: Exception) {}
     }
 
     private fun triggerNativeNotification(title: String, message: String) {
@@ -356,5 +469,13 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("Continuar", null)
             .show()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopNativeWakeWord()
+        try {
+            speechRecognizer?.destroy()
+        } catch (e: Exception) {}
     }
 }

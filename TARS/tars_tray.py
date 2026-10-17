@@ -65,8 +65,16 @@ def stop_all_speech():
         pass
 
 def save_mode(mode):
-    with open(STATE_FILE, "w") as f:
-        json.dump({"mode": mode}, f)
+    try:
+        data = {}
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, "r") as f:
+                data = json.load(f)
+        data["mode"] = mode
+        with open(STATE_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
         
     sound = None
     msg = ""
