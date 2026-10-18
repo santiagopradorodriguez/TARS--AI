@@ -1,9 +1,8 @@
-const CACHE_NAME = 'tars-shell-v4.8';
+const CACHE_NAME = 'tars-shell-v5.2';
 const PRECACHE_ASSETS = [
     '/',
-    '/static/style.css?v=4.8',
-    '/static/app.js?v=4.8',
-    '/static/connection_config.js',
+    '/static/style.css?v=5.2',
+    '/static/app.js?v=5.2',
     '/manifest.json',
     '/static/icon-192.png'
 ];
@@ -68,16 +67,16 @@ self.addEventListener('push', (event) => {
             payload.body = event.data.text();
         }
     }
-    const notifTag = payload.tag || 'tars-msg-latest';
+    const notifTag = 'tars-active-notification';
     const isMuted = Boolean(payload.voice_muted);
     const options = {
         body: payload.body,
         icon: '/static/icon-192.png',
         badge: '/static/icon-192.png',
         vibrate: [300, 120, 300, 120, 400],
-        requireInteraction: true,
+        requireInteraction: false,
         tag: notifTag,
-        renotify: false,
+        renotify: true,
         actions: [
             {
                 action: 'toggle_voice',
@@ -94,12 +93,7 @@ self.addEventListener('push', (event) => {
         }
     };
     event.waitUntil(
-        self.registration.getNotifications({ tag: notifTag }).then((existing) => {
-            if (existing && existing.length > 0) {
-                return;
-            }
-            return self.registration.showNotification(payload.title, options);
-        })
+        self.registration.showNotification(payload.title, options)
     );
 });
 

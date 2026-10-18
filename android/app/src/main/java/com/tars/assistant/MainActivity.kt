@@ -2,16 +2,33 @@ package com.tars.assistant
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.annotation.TargetApi
+import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.http.SslError
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.view.LayoutInflater
 import android.view.View
+import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -20,9 +37,10 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
-import androidx.appcompat.app.AlertDialog
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
@@ -39,18 +57,6 @@ import java.net.NetworkInterface
 import java.net.URL
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.Intent
-import android.os.Build
-import android.os.Handler
-import android.os.Looper
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import android.webkit.JavascriptInterface
-import androidx.core.app.NotificationCompat
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
@@ -72,10 +78,38 @@ class MainActivity : AppCompatActivity() {
     private val activityScope = CoroutineScope(Dispatchers.Main + Job())
     private val RECORD_AUDIO_PERMISSION_CODE = 101
 
+    private var filePathCallback: ValueCallback<Array<Uri>>? = null
+
+    private val fileChooserLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (filePathCallback == null) return@registerForActivityResult
+        val uris: Array<Uri>? = if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val data = result.data
+            if (data?.clipData != null) {
+                val count = data.clipData!!.itemCount
+                val list = mutableListOf<Uri>()
+                for (i in 0 until count) {
+                    list.add(data.clipData!!.getItemAt(i).uri)
+                }
+                list.toTypedArray()
+            } else if (data?.data != null) {
+                arrayOf(data.data!!)
+            } else {
+                null
+            }
+        } else {
+            null
+        }
+        filePathCallback?.onReceiveValue(uris)
+        filePathCallback = null
+    }
+
     companion object {
         private const val PREFS_NAME = "tars_app_config"
         private const val KEY_LOCAL_IP = "local_ip"
         private const val KEY_TS_DOMAIN = "ts_domain"
+        private const val TARS_MSG_NOTIFICATION_ID = 1001
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -138,6 +172,28 @@ class MainActivity : AppCompatActivity() {
                     swipeRefresh.isRefreshing = false
                 }
             }
+
+            override fun onShowFileChooser(
+                webView: WebView?,
+                filePathCallback: ValueCallback<Array<Uri>>?,
+                fileChooserParams: FileChooserParams?
+            ): Boolean {
+                this@MainActivity.filePathCallback?.onReceiveValue(null)
+                this@MainActivity.filePathCallback = filePathCallback
+
+                val intent = fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                    type = "*/*"
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                }
+                try {
+                    fileChooserLauncher.launch(intent)
+                    return true
+                } catch (e: Exception) {
+                    this@MainActivity.filePathCallback?.onReceiveValue(null)
+                    this@MainActivity.filePathCallback = null
+                    return false
+                }
+            }
         }
 
         webView.webViewClient = object : WebViewClient() {
@@ -151,6 +207,23 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 loadingLayout.visibility = View.GONE
                 swipeRefresh.isRefreshing = false
+            }
+
+            override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
+                super.onReceivedError(view, errorCode, description, failingUrl)
+                loadingLayout.visibility = View.GONE
+                swipeRefresh.isRefreshing = false
+                showConnectionFailedDialog(failingUrl ?: "")
+            }
+
+            @TargetApi(Build.VERSION_CODES.M)
+            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                super.onReceivedError(view, request, error)
+                if (request?.isForMainFrame == true) {
+                    loadingLayout.visibility = View.GONE
+                    swipeRefresh.isRefreshing = false
+                    showConnectionFailedDialog(request.url?.toString() ?: "")
+                }
             }
         }
     }
@@ -169,7 +242,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupSwipeRefresh() {
         swipeRefresh.setColorSchemeResources(R.color.primary)
-        // Deshabilitar pull-to-refresh para que el usuario pueda scrollear libremente hacia arriba en el chat
         swipeRefresh.isEnabled = false
         swipeRefresh.setOnRefreshListener {
             webView.reload()
@@ -198,6 +270,38 @@ class MainActivity : AppCompatActivity() {
         fun showNotification(title: String, message: String) {
             runOnUiThread {
                 triggerNativeNotification(title, message)
+            }
+        }
+
+        @JavascriptInterface
+        fun clearNotifications() {
+            runOnUiThread {
+                val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                notificationManager.cancelAll()
+            }
+        }
+
+        @JavascriptInterface
+        fun isNotificationPermissionGranted(): Boolean {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        }
+
+        @JavascriptInterface
+        fun requestNotificationPermission() {
+            runOnUiThread {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                        ActivityCompat.requestPermissions(
+                            this@MainActivity,
+                            arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                            RECORD_AUDIO_PERMISSION_CODE + 1
+                        )
+                    }
+                }
             }
         }
 
@@ -344,7 +448,7 @@ class MainActivity : AppCompatActivity() {
                 .setContentIntent(pendingIntent)
                 .build()
 
-            notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+            notificationManager.notify(TARS_MSG_NOTIFICATION_ID, notification)
         } catch (e: Exception) {
             // Manejo seguro si la notificacion no puede ser despachada
         }
@@ -373,26 +477,117 @@ class MainActivity : AppCompatActivity() {
 
         activityScope.launch {
             val chosenUrl = withContext(Dispatchers.IO) {
-                var canUseLocal = false
-                if (targetLocal.isNotBlank()) {
-                    canUseLocal = testEndpointReachable(targetLocal, timeoutMs = 450)
+                // 1. Probar la IP local guardada
+                if (targetLocal.isNotBlank() && testEndpointReachable(targetLocal, timeoutMs = 600)) {
+                    return@withContext targetLocal
                 }
-                if (canUseLocal) {
-                    targetLocal
-                } else if (targetTs.isNotBlank()) {
-                    targetTs
-                } else {
-                    targetLocal
+                // 2. Probar el dominio Tailscale guardado
+                if (targetTs.isNotBlank() && testEndpointReachable(targetTs, timeoutMs = 750)) {
+                    return@withContext targetTs
                 }
+
+                // 3. Probar servidores conocidos alternativos si el configurado está offline
+                val knownCandidates = listOf(
+                    "https://192.168.1.x:8443", // Lenovo Yoga Local
+                    "https://100.x.x.a:8443", // Lenovo Yoga Tailscale
+                    "https://192.168.1.y:8443", // Pop!_OS Local
+                    "https://100.x.x.b:8443"  // Pop!_OS Tailscale
+                )
+                for (cand in knownCandidates) {
+                    if (cand != targetLocal && cand != targetTs) {
+                        if (testEndpointReachable(cand, timeoutMs = 500)) {
+                            return@withContext cand
+                        }
+                    }
+                }
+
+                null
             }
 
-            if (chosenUrl.isNotBlank()) {
+            if (chosenUrl != null && chosenUrl.isNotBlank()) {
                 webView.loadUrl(chosenUrl)
             } else {
                 loadingLayout.visibility = View.GONE
-                showSettingsDialog(isFirstRun = true)
+                showConnectionFailedDialog(if (targetLocal.isNotBlank()) targetLocal else targetTs)
             }
         }
+    }
+
+    private fun showConnectionFailedDialog(failedUrl: String) {
+        if (isFinishing || isDestroyed) return
+
+        val cleanFailed = if (failedUrl.isNotBlank()) failedUrl else "el servidor"
+        val options = arrayOf(
+            "💻 Lenovo Yoga (Wi-Fi: 192.168.1.x)",
+            "🌐 Lenovo Yoga (Tailscale: 100.x.x.a)",
+            "🖥️ Pop!_OS (Wi-Fi: 192.168.1.y)",
+            "🌐 Pop!_OS (Tailscale: 100.x.x.b)",
+            "🔍 Escanear red Wi-Fi automáticamente",
+            "⚙️ Ingresar IP o dominio manualmente"
+        )
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Error al conectar con TARS")
+            .setMessage("No se pudo conectar a $cleanFailed.\nElige a qué PC conectar:")
+            .setItems(options) { dialog, which ->
+                dialog.dismiss()
+                when (which) {
+                    0 -> saveAndConnect("https://192.168.1.x:8443", "100.x.x.a:8443")
+                    1 -> saveAndConnect("192.168.1.x:8443", "https://100.x.x.a:8443")
+                    2 -> saveAndConnect("https://192.168.1.y:8443", "100.x.x.b:8443")
+                    3 -> saveAndConnect("192.168.1.y:8443", "https://100.x.x.b:8443")
+                    4 -> autoScanWifiAndConnect()
+                    5 -> showSettingsDialog(isFirstRun = false)
+                }
+            }
+            .setPositiveButton("Reintentar") { dialog, _ ->
+                dialog.dismiss()
+                val savedLocal = prefs.getString(KEY_LOCAL_IP, "") ?: ""
+                val savedTs = prefs.getString(KEY_TS_DOMAIN, "") ?: ""
+                connectToBestNetwork(savedLocal, savedTs)
+            }
+            .setNegativeButton("Ajustes") { dialog, _ ->
+                dialog.dismiss()
+                showSettingsDialog(isFirstRun = false)
+            }
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun saveAndConnect(localIp: String, tsDomain: String) {
+        prefs.edit()
+            .putString(KEY_LOCAL_IP, localIp)
+            .putString(KEY_TS_DOMAIN, tsDomain)
+            .apply()
+        connectToBestNetwork(localIp, tsDomain)
+    }
+
+    private fun autoScanWifiAndConnect() {
+        val localIp = getLocalWifiIpAddress()
+        if (localIp == null) {
+            Toast.makeText(this, "Conecta el Wi-Fi para buscar servidores TARS.", Toast.LENGTH_LONG).show()
+            showSettingsDialog(isFirstRun = false)
+            return
+        }
+        loadingLayout.visibility = View.VISIBLE
+        loadingText.text = "Escaneando red Wi-Fi..."
+        val baseSubnet = localIp.substringBeforeLast(".") + "."
+
+        scanSubnetForTars(
+            baseSubnet,
+            onFound = { foundUrl ->
+                loadingLayout.visibility = View.GONE
+                Toast.makeText(this@MainActivity, "TARS encontrado: $foundUrl", Toast.LENGTH_SHORT).show()
+                saveAndConnect(foundUrl, prefs.getString(KEY_TS_DOMAIN, "") ?: "")
+            },
+            onFinished = { found ->
+                if (!found) {
+                    loadingLayout.visibility = View.GONE
+                    Toast.makeText(this@MainActivity, "No se encontró ningún TARS activo en $baseSubnet*", Toast.LENGTH_LONG).show()
+                    showConnectionFailedDialog("la red $baseSubnet*")
+                }
+            }
+        )
     }
 
     private fun testEndpointReachable(baseUrl: String, timeoutMs: Int): Boolean {

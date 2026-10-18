@@ -160,13 +160,14 @@ let audioUnlocked = false;
 let bgKeepAliveAudio = null;
 
 function updateMediaSessionNotification(textPreview) {
-    if ('mediaSession' in navigator) {
+    // Solo actualizar si hay audio real de TARS reproduciéndose
+    if ('mediaSession' in navigator && currentAudio && !currentAudio.paused) {
         try {
             const chatName = (typeof currentChatTitle !== 'undefined' && currentChatTitle && currentChatTitle.innerText)
                 ? currentChatTitle.innerText
                 : 'Antigravity';
             navigator.mediaSession.metadata = new MediaMetadata({
-                title: textPreview || 'TARS Conectado en segundo plano',
+                title: textPreview || 'TARS Respondiendo',
                 artist: `TARS • ${chatName}`,
                 album: 'Antigravity Móvil',
                 artwork: [
@@ -180,13 +181,12 @@ function updateMediaSessionNotification(textPreview) {
 
 function unlockMobileAudio() {
     if (!audioUnlocked) {
-        // WAV silencioso de 1 segundo en loop para que Android no congele la pestaña al salir de Chrome
+        // WAV silencioso de 1 segundo en loop para mantener el proceso vivo sin generar tarjeta multimedia en la barra de Chrome
         bgKeepAliveAudio = new Audio("data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA");
         bgKeepAliveAudio.loop = true;
         bgKeepAliveAudio.volume = 0.01;
         bgKeepAliveAudio.play().then(() => {
             audioUnlocked = true;
-            updateMediaSessionNotification('Sistemas listos • Escuchando respuestas');
         }).catch(() => {});
     }
 }
@@ -231,6 +231,12 @@ function stopCurrentAudio() {
     if (audioControlBar) {
         audioControlBar.classList.add('hidden');
     }
+    if ('mediaSession' in navigator) {
+        try {
+            navigator.mediaSession.metadata = null;
+            navigator.mediaSession.playbackState = 'none';
+        } catch (e) {}
+    }
 }
 
 function pauseCurrentAudio() {
@@ -243,6 +249,11 @@ function pauseCurrentAudio() {
             currentAudioBtn.classList.remove('playing');
             currentAudioBtn.classList.add('paused');
             currentAudioBtn.querySelector('span').innerText = 'Reanudar voz';
+        }
+        if ('mediaSession' in navigator) {
+            try {
+                navigator.mediaSession.playbackState = 'paused';
+            } catch (e) {}
         }
     }
 }
@@ -257,6 +268,11 @@ function resumeCurrentAudio() {
                 currentAudioBtn.classList.remove('paused');
                 currentAudioBtn.classList.add('playing');
                 currentAudioBtn.querySelector('span').innerText = 'Pausar voz';
+            }
+            if ('mediaSession' in navigator) {
+                try {
+                    navigator.mediaSession.playbackState = 'playing';
+                } catch (e) {}
             }
         }).catch(() => {});
     }
@@ -302,6 +318,20 @@ function playAudioUrl(url, sourceBtn = null) {
             sourceBtn.classList.remove('paused');
             sourceBtn.classList.add('playing');
             sourceBtn.querySelector('span').innerText = 'Pausar voz';
+        }
+        if ('mediaSession' in navigator) {
+            try {
+                navigator.mediaSession.metadata = new MediaMetadata({
+                    title: 'TARS Respondiendo',
+                    artist: 'TARS • Elena',
+                    album: 'Antigravity',
+                    artwork: [
+                        { src: '/static/icon-192.png', sizes: '192x192', type: 'image/png' },
+                        { src: '/static/icon-512.png', sizes: '512x512', type: 'image/png' }
+                    ]
+                });
+                navigator.mediaSession.playbackState = 'playing';
+            } catch (e) {}
         }
     }).catch(err => {
         console.log("Autoplay requiere tocar la pantalla al menos una vez:", err);
@@ -2012,10 +2042,25 @@ async function setupWebPushSubscription() {
 }
 
 let isPushSubscribed = false;
+const NOTIF_STORAGE_KEY = 'tars_notifications_enabled';
+
+function areNotificationsEnabled() {
+    const val = localStorage.getItem(NOTIF_STORAGE_KEY);
+    if (val === null) {
+        return ('Notification' in window && Notification.permission === 'granted') ||
+               (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function');
+    }
+    return val === 'true';
+}
 
 function updateNotifyBtnUI(pushActive = false) {
     if (!notifyToggleBtn) return;
-    if (pushActive || ('Notification' in window && Notification.permission === 'granted')) {
+    const enabled = areNotificationsEnabled();
+    const hasPermission = pushActive ||
+        ('Notification' in window && Notification.permission === 'granted') ||
+        (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function');
+
+    if (enabled && hasPermission) {
         notifyToggleBtn.classList.add('active');
         if (notifyBtnLabel) notifyBtnLabel.innerText = 'ON';
     } else {
@@ -2024,7 +2069,7 @@ function updateNotifyBtnUI(pushActive = false) {
     }
 }
 updateNotifyBtnUI();
-if ('Notification' in window && Notification.permission === 'granted') {
+if (areNotificationsEnabled() && 'Notification' in window && Notification.permission === 'granted') {
     setupWebPushSubscription();
 }
 
@@ -2058,11 +2103,14 @@ if (waToastBanner) {
 }
 
 async function triggerPhoneNotification(rawContent, customTitle = null, stepIndex = null) {
+    if (!areNotificationsEnabled()) {
+        return;
+    }
+
     const chatName = (currentChatTitle && currentChatTitle.innerText) ? currentChatTitle.innerText : 'Antigravity';
     const title = customTitle || `TARS - ${activePcName} • ${chatName}`;
     const body = cleanPreviewText(rawContent);
 
-    updateMediaSessionNotification(body);
     if (!isMobileVoiceMuted) {
         try {
             const chime = new Audio('/static/wa_notify.wav');
@@ -2089,15 +2137,16 @@ async function triggerPhoneNotification(rawContent, customTitle = null, stepInde
     }
 
     if ('Notification' in window && Notification.permission === 'granted') {
-        const notifTag = stepIndex ? `tars-step-${stepIndex}` : 'tars-msg-latest';
+        // Tag único para que Chrome reemplace en vez de apilar decenas de notificaciones "tars"
+        const notifTag = 'tars-active-notification';
         const options = {
             body: body,
             icon: '/static/icon-192.png',
             badge: '/static/icon-192.png',
             vibrate: [300, 120, 300, 120, 400],
-            requireInteraction: true,
+            requireInteraction: false,
             tag: notifTag,
-            renotify: false,
+            renotify: true,
             actions: [
                 {
                     action: 'toggle_voice',
@@ -2111,10 +2160,7 @@ async function triggerPhoneNotification(rawContent, customTitle = null, stepInde
         };
         try {
             if (swRegistration && swRegistration.showNotification) {
-                const existing = await swRegistration.getNotifications({ tag: notifTag });
-                if (!existing || existing.length === 0) {
-                    await swRegistration.showNotification(title, options);
-                }
+                await swRegistration.showNotification(title, options);
                 return;
             }
         } catch (e) {}
@@ -2136,33 +2182,66 @@ async function acquireWakeLock(enable) {
     } catch (e) {}
 }
 
-async function activateNotificationsAndTest() {
+async function toggleNotifications() {
+    const isCurrentlyActive = notifyToggleBtn && notifyToggleBtn.classList.contains('active');
+
+    if (isCurrentlyActive) {
+        // APAGAR notificaciones
+        localStorage.setItem(NOTIF_STORAGE_KEY, 'false');
+        updateNotifyBtnUI(false);
+        if (navigator.vibrate) navigator.vibrate([80]);
+
+        if (swRegistration && swRegistration.getNotifications) {
+            try {
+                const notifs = await swRegistration.getNotifications();
+                notifs.forEach(n => n.close());
+            } catch (e) {}
+        }
+        if (window.AndroidBridge && typeof window.AndroidBridge.clearNotifications === 'function') {
+            try {
+                window.AndroidBridge.clearNotifications();
+            } catch (e) {}
+        }
+        showWhatsAppToast('TARS Notificaciones', 'Notificaciones apagadas.');
+        return;
+    }
+
+    // ENCENDER notificaciones
+    localStorage.setItem(NOTIF_STORAGE_KEY, 'true');
     unlockMobileAudio();
-    if (navigator.vibrate) navigator.vibrate([300, 120, 300, 120, 400]);
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+
+    if (window.AndroidBridge) {
+        if (typeof window.AndroidBridge.requestNotificationPermission === 'function') {
+            window.AndroidBridge.requestNotificationPermission();
+        }
+        updateNotifyBtnUI(true);
+        showWhatsAppToast('TARS Android', 'Notificaciones activadas.');
+        if (typeof window.AndroidBridge.showNotification === 'function') {
+            window.AndroidBridge.showNotification('TARS', 'Notificaciones activadas correctamente.');
+        }
+        return;
+    }
 
     if ('Notification' in window && Notification.permission !== 'granted') {
         try {
-            await Notification.requestPermission();
-        } catch (e) {}
-    }
-
-    const pushOk = await setupWebPushSubscription();
-    if (!pushOk && !window.location.hostname.endsWith('.trycloudflare.com')) {
-        try {
-            const r = await fetch('/api/tunnel_url');
-            const d = await r.json();
-            if (d.tunnel_url) {
-                window.location.href = d.tunnel_url;
+            const res = await Notification.requestPermission();
+            if (res !== 'granted') {
+                localStorage.setItem(NOTIF_STORAGE_KEY, 'false');
+                updateNotifyBtnUI(false);
+                showWhatsAppToast('Permiso Denegado', 'Permiso denegado por el navegador.');
                 return;
             }
         } catch (e) {}
     }
 
+    const pushOk = await setupWebPushSubscription();
     updateNotifyBtnUI(pushOk);
     showWhatsAppToast(
-        'TARS • Prueba en 5 seg',
-        'Salí de Chrome a la pantalla principal ahora: en 5 segundos te vibra y llega la notificación arriba.'
+        'TARS Notificaciones',
+        'Notificaciones activadas. En 5 seg recibirás una prueba.'
     );
+
     try {
         await fetch('/api/test_notify', {
             method: 'POST',
@@ -2173,18 +2252,18 @@ async function activateNotificationsAndTest() {
 }
 
 if (notifyToggleBtn) {
-    notifyToggleBtn.addEventListener('click', activateNotificationsAndTest);
+    notifyToggleBtn.addEventListener('click', toggleNotifications);
 }
 
 if (waToastBanner) {
     waToastBanner.addEventListener('click', () => {
-        if ('Notification' in window && Notification.permission !== 'granted') {
-            activateNotificationsAndTest();
+        if ('Notification' in window && Notification.permission !== 'granted' && areNotificationsEnabled()) {
+            toggleNotifications();
         }
     });
 }
 
-if ('Notification' in window && Notification.permission !== 'granted') {
+if ('Notification' in window && Notification.permission !== 'granted' && areNotificationsEnabled() && !window.AndroidBridge) {
     setTimeout(() => {
         showWhatsAppToast(
             'TOCA ACÁ PARA ACTIVAR ALERTAS',
@@ -2194,7 +2273,7 @@ if ('Notification' in window && Notification.permission !== 'granted') {
 }
 
 document.addEventListener('click', () => {
-    if ('Notification' in window && Notification.permission === 'default') {
+    if ('Notification' in window && Notification.permission === 'default' && areNotificationsEnabled()) {
         Notification.requestPermission().then(() => {
             updateNotifyBtnUI();
             setupWebPushSubscription();

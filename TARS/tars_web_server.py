@@ -1823,7 +1823,7 @@ async def handle_sync(request):
         import urllib.parse
         rem_ip = get_active_pc_ip()
         qs = f"/api/sync?last_index={last_idx}&chat_id={urllib.parse.quote(client_chat_id)}"
-        rem_data = await asyncio.to_thread(remote_api_request, rem_ip, qs, "GET", None, 20.0)
+        rem_data = await asyncio.to_thread(remote_api_request, rem_ip, qs, "GET", None, 2.5)
         if isinstance(rem_data, dict) and not rem_data.get("_proxy_error"):
             rem_data = enrich_remote_sync_data(rem_ip, rem_data)
             if rem_data.get("has_new"):
@@ -1838,6 +1838,7 @@ async def handle_sync(request):
             "step_index": last_idx,
             "chat_id": client_chat_id,
             "chat_changed": False,
+            "remote_offline": True,
             "pc_audio_muted": get_pc_sound_muted(),
             "mobile_voice_muted": get_mobile_voice_muted(),
             "tars_mode": get_tars_mode(),
