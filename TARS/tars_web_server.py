@@ -1494,10 +1494,16 @@ async def handle_audio(request):
         return web.json_response({"reply": f"Error procesando audio: {e}"}, status=500)
 
 
-def get_active_transcript_path():
+def get_active_transcript_path(target_chat_id=None):
     brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
     if not os.path.exists(brain_dir):
         return ""
+    # 0. Si se solicitó un chat específico (ej. el que tiene abierto el celular), usarlo directamente
+    if target_chat_id:
+        p = os.path.join(brain_dir, target_chat_id, ".system_generated", "logs", "transcript.jsonl")
+        if os.path.exists(p):
+            return p
+
     # 1. Intentar obtener el ID exacto del chat activo via CDP
     try:
         active_id = get_current_antigravity_convo_id()
@@ -1548,7 +1554,7 @@ def format_spanish_tool_action(t_name, args):
     return f"[Herramienta] {act}" if act else "[Herramienta] Ejecutando acción"
 
 
-def get_latest_transcript_message():
+def get_latest_transcript_message(target_chat_id=None):
     latest_msg = ""
     latest_idx = 0
     proc_info = {
@@ -1562,7 +1568,7 @@ def get_latest_transcript_message():
         "recent_steps": [],
         "generated_files": []
     }
-    transcript_path = get_active_transcript_path()
+    transcript_path = get_active_transcript_path(target_chat_id)
     if transcript_path and os.path.exists(transcript_path):
         try:
             with open(transcript_path, "rb") as f:
@@ -1848,9 +1854,12 @@ async def handle_sync(request):
 
     active_id = await asyncio.to_thread(get_current_antigravity_convo_id) or ""
     current_model = await asyncio.to_thread(get_current_antigravity_model) or ""
+    target_chat = client_chat_id or active_id
     chat_changed = bool(client_chat_id and active_id and client_chat_id != active_id)
+    eval_chat = active_id if chat_changed else target_chat
+    return_chat_id = active_id if chat_changed else target_chat
 
-    latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message)
+    latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message, eval_chat)
 
     if chat_changed or (not proc_info.get("is_processing") and latest_idx > last_idx and latest_msg):
         # Extraer imágenes y archivos generados o linkeados en la respuesta
@@ -1867,7 +1876,7 @@ async def handle_sync(request):
             "content": latest_msg,
             "media": media,
             "audio_url": audio_url,
-            "chat_id": active_id,
+            "chat_id": return_chat_id,
             "current_model": current_model,
             "chat_changed": chat_changed,
             "processing_info": proc_info,
@@ -1882,7 +1891,7 @@ async def handle_sync(request):
     return web.json_response({
         "has_new": False,
         "step_index": latest_idx,
-        "chat_id": active_id,
+        "chat_id": return_chat_id,
         "current_model": current_model,
         "chat_changed": False,
         "processing_info": proc_info,
@@ -2755,6 +2764,27 @@ async def handle_push_subscribe(request):
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
+async def handle_push_unsubscribe(request):
+    try:
+        sub = await request.json()
+        if not sub or "endpoint" not in sub:
+            return web.json_response({"success": False, "error": "Invalid subscription"}, status=400)
+        endpoint = sub["endpoint"]
+        subs = []
+        if os.path.exists(SUBSCRIPTIONS_FILE):
+            try:
+                with open(SUBSCRIPTIONS_FILE, "r") as f:
+                    subs = json.load(f)
+            except Exception:
+                subs = []
+        subs = [s for s in subs if s.get("endpoint") != endpoint]
+        with open(SUBSCRIPTIONS_FILE, "w") as f:
+            json.dump(subs, f)
+        print(f"[TARS Web] Celular desuscripto de Web Push (total={len(subs)})")
+        return web.json_response({"success": True, "count": len(subs)})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
 async def handle_sw(request):
     sw_path = os.path.join(WEB_DIR, "sw.js")
     if os.path.exists(sw_path):
@@ -2879,6 +2909,7 @@ def init_app():
     app.router.add_get("/api/tunnel_url", handle_tunnel_url)
     app.router.add_get("/api/vapid_public_key", handle_vapid_public_key)
     app.router.add_post("/api/push_subscribe", handle_push_subscribe)
+    app.router.add_post("/api/push_unsubscribe", handle_push_unsubscribe)
     app.router.add_get("/api/pcs", handle_get_pcs)
     app.router.add_post("/api/select_pc", handle_select_pc)
     app.router.add_post("/api/add_pc", handle_add_pc)

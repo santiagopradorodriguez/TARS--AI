@@ -919,6 +919,12 @@ body {
 }
 
 /* ===== BOTON Y BANNER DE NOTIFICACIONES ESTILO WHATSAPP ===== */
+.notify-btn {
+    border-color: rgba(239, 68, 68, 0.4) !important;
+    background: rgba(239, 68, 68, 0.12) !important;
+    color: #fca5a5 !important;
+}
+
 .notify-btn.active {
     border-color: rgba(16, 185, 129, 0.55) !important;
     background: rgba(16, 185, 129, 0.16) !important;
@@ -1014,29 +1020,54 @@ body {
 .header-top-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     width: 100%;
-    gap: 8px;
-    min-width: 0;
 }
 
 .header-toggles {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    overflow-x: auto !important;
-    overflow-y: hidden !important;
-    white-space: nowrap !important;
-    flex-wrap: nowrap !important;
-    -webkit-overflow-scrolling: touch !important;
-    scrollbar-width: none !important;
-    max-width: calc(100vw - 110px);
-    padding: 2px 2px;
-    flex-shrink: 1;
+    display: grid !important;
+    grid-template-columns: repeat(4, 1fr) !important;
+    gap: 4px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 2px 0 !important;
+    box-sizing: border-box !important;
 }
 
-.header-toggles::-webkit-scrollbar {
-    display: none;
+.header-toggles .pc-mode-toggle-btn,
+.header-toggles .pc-sound-toggle-btn {
+    width: 100% !important;
+    height: 28px !important;
+    padding: 2px 4px !important;
+    font-size: 0.70rem !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    border-radius: 8px !important;
+    margin: 0 !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    box-sizing: border-box !important;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-main);
+    cursor: pointer;
+    transition: all 0.18s ease;
+}
+
+.header-toggles button svg {
+    flex-shrink: 0 !important;
+    margin-right: 3px !important;
+    width: 13px !important;
+    height: 13px !important;
+}
+
+.header-toggles button span {
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
 }
 
 .brand h1 {
@@ -1225,14 +1256,26 @@ body {
 }
 
 /* ===== BARRA DE PREVIEW Y BOTON DE ADJUNTOS ===== */
-.attach-btn {
-    color: var(--text-muted);
-    transition: color 0.15s, background-color 0.15s;
+.icon-btn.attach-btn {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: var(--text-muted) !important;
+    border: 1px solid var(--card-border) !important;
+    transition: all 0.2s ease;
     flex-shrink: 0;
+    cursor: pointer;
 }
-.attach-btn:active {
-    color: var(--accent-blue);
-    background-color: rgba(59, 130, 246, 0.15);
+
+.icon-btn.attach-btn:hover,
+.icon-btn.attach-btn:active {
+    background-color: rgba(59, 130, 246, 0.2) !important;
+    color: var(--accent-blue) !important;
+    border-color: var(--accent-blue) !important;
+}
+
+.icon-btn.attach-btn.has-files {
+    background-color: var(--accent-blue) !important;
+    color: #ffffff !important;
+    border-color: var(--accent-blue) !important;
 }
 
 .attachment-preview-bar {
@@ -1306,27 +1349,32 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 14px;
     position: relative;
+    width: 100%;
 }
 
 .cancel-proc-btn {
+    position: absolute !important;
+    right: 12px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
     display: flex;
     align-items: center;
     gap: 6px;
     background: rgba(239, 68, 68, 0.14);
     border: 1px solid rgba(239, 68, 68, 0.45);
     color: #fca5a5;
-    padding: 9px 14px;
-    border-radius: 22px;
-    font-size: 0.82rem;
+    padding: 7px 12px;
+    border-radius: 20px;
+    font-size: 0.78rem;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.18s ease;
+    white-space: nowrap;
 }
 
 .cancel-proc-btn:active {
-    transform: scale(0.94);
+    transform: translateY(-50%) scale(0.94) !important;
     background: #ef4444;
     color: #ffffff;
 }
@@ -1376,23 +1424,7 @@ body {
 }
 
 .user-cancel-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    margin-top: 8px;
-    background: rgba(239, 68, 68, 0.22);
-    border: 1px solid rgba(252, 165, 165, 0.5);
-    color: #fecaca;
-    padding: 4px 10px;
-    border-radius: 12px;
-    font-size: 0.74rem;
-    font-weight: 600;
-    cursor: pointer;
-}
-
-.user-cancel-chip:active {
-    background: #ef4444;
-    color: #ffffff;
+    display: none !important;
 }
 
 .proc-step-item {

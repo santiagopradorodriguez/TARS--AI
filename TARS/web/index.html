@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0f1117">
     <title>TARS Movil</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/style.css?v=5.2">
+    <link rel="stylesheet" href="/static/style.css?v=5.3">
 </head>
 <body>
     <div class="app-container">
@@ -17,61 +17,61 @@
                     <h1>TARS</h1>
                     <span id="network-latency-badge" class="network-latency-badge" title="Latencia en tiempo real con TARS">-- ms</span>
                 </div>
-                <div class="header-toggles">
-                    <button id="pc-mode-btn" class="pc-mode-toggle-btn mode-auto" title="Cambiar modo de escucha de la PC (Verde: Hola TARS / Amarillo: F12 / Rojo: Silencio)" aria-label="Modo de escucha PC">
-                        <span class="status-indicator online" id="pc-mode-indicator"></span>
-                        <span id="pc-mode-label">AUTO</span>
-                    </button>
-                    <button id="guide-btn" class="pc-sound-toggle-btn guide-btn" title="Guia e instrucciones para nuevos usuarios" aria-label="Ayuda">
-                        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-                            <path d="M11 18h2v-2h-2v2zm1-16C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-2.21 0-4 1.79-4 4h2c0-1.1.9-2 2-2s2 .9 2 2c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5 0-2.21-1.79-4-4-4z"/>
-                        </svg>
-                        <span class="pc-sound-label">Guía</span>
-                    </button>
-                    <button id="local-mode-toggle-btn" class="pc-sound-toggle-btn local-mode-btn" title="Alternar entre Modo Local y Modo Remoto" aria-label="Modo de conexion">
-                        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-                            <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
-                        </svg>
-                        <span id="local-mode-btn-label" class="pc-sound-label">LOCAL</span>
-                    </button>
-                    <button id="pwa-install-btn" class="pc-sound-toggle-btn install-btn" title="Instalar TARS como App en tu celular" aria-label="Instalar App">
-                        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-                            <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
-                        </svg>
-                        <span class="pc-sound-label">App</span>
-                    </button>
-                    <button id="wake-word-toggle-btn" class="pc-sound-toggle-btn wake-word-btn" title="Activar escucha manos libres Hola TARS en el celular" aria-label="Hola TARS">
-                        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-                            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-                            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-                        </svg>
-                        <span id="wake-word-btn-label" class="pc-sound-label">TARS</span>
-                    </button>
-                    <button id="notify-toggle-btn" class="pc-sound-toggle-btn notify-btn" title="Activar notificaciones estilo WhatsApp" aria-label="Notificaciones">
-                        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-                            <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
-                        </svg>
-                        <span id="notify-btn-label" class="pc-sound-label">ON</span>
-                    </button>
-                    <button id="mobile-voice-toggle-btn" class="pc-sound-toggle-btn" title="Silenciar voz en el celular" aria-label="Voz en el celular">
-                        <svg id="mobile-voice-on-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-                            <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
-                        </svg>
-                        <svg id="mobile-voice-off-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="display: none;">
-                            <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27l4.73 4.73H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
-                        </svg>
-                        <span id="mobile-voice-label" class="pc-sound-label">Voz</span>
-                    </button>
-                    <button id="pc-sound-toggle-btn" class="pc-sound-toggle-btn" title="Silenciar audio en PC" aria-label="Silenciar audio en PC">
-                        <svg id="pc-sound-on-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor">
-                            <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
-                        </svg>
-                        <svg id="pc-sound-off-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="display: none;">
-                            <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27l4.73 4.73H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
-                        </svg>
-                        <span class="pc-sound-label">PC</span>
-                    </button>
-                </div>
+            </div>
+            <div class="header-toggles">
+                <button id="pc-mode-btn" class="pc-mode-toggle-btn mode-auto" title="Cambiar modo de escucha de la PC (Verde: Hola TARS / Amarillo: F12 / Rojo: Silencio)" aria-label="Modo de escucha PC">
+                    <span class="status-indicator online" id="pc-mode-indicator"></span>
+                    <span id="pc-mode-label">AUTO</span>
+                </button>
+                <button id="notify-toggle-btn" class="pc-sound-toggle-btn notify-btn" title="Alternar notificaciones de TARS" aria-label="Notificaciones">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                        <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>
+                    </svg>
+                    <span id="notify-btn-label" class="pc-sound-label">ON</span>
+                </button>
+                <button id="mobile-voice-toggle-btn" class="pc-sound-toggle-btn" title="Silenciar / Activar voz en el celular" aria-label="Voz en el celular">
+                    <svg id="mobile-voice-on-icon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                        <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+                    </svg>
+                    <svg id="mobile-voice-off-icon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="display: none;">
+                        <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27l4.73 4.73H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
+                    </svg>
+                    <span id="mobile-voice-label" class="pc-sound-label">Voz</span>
+                </button>
+                <button id="pc-sound-toggle-btn" class="pc-sound-toggle-btn" title="Silenciar / Activar audio en PC" aria-label="Silenciar audio en PC">
+                    <svg id="pc-sound-on-icon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                        <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+                    </svg>
+                    <svg id="pc-sound-off-icon" viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="display: none;">
+                        <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27l4.73 4.73H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
+                    </svg>
+                    <span class="pc-sound-label">PC</span>
+                </button>
+                <button id="wake-word-toggle-btn" class="pc-sound-toggle-btn wake-word-btn" title="Activar escucha manos libres Hola TARS en el celular" aria-label="Hola TARS">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                        <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                    </svg>
+                    <span id="wake-word-btn-label" class="pc-sound-label">TARS</span>
+                </button>
+                <button id="local-mode-toggle-btn" class="pc-sound-toggle-btn local-mode-btn" title="Alternar entre Modo Local y Modo Remoto" aria-label="Modo de conexion">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                        <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+                    </svg>
+                    <span id="local-mode-btn-label" class="pc-sound-label">LOCAL</span>
+                </button>
+                <button id="guide-btn" class="pc-sound-toggle-btn guide-btn" title="Guia e instrucciones para nuevos usuarios" aria-label="Ayuda">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                        <path d="M11 18h2v-2h-2v2zm1-16C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-2.21 0-4 1.79-4 4h2c0-1.1.9-2 2-2s2 .9 2 2c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5 0-2.21-1.79-4-4-4z"/>
+                    </svg>
+                    <span class="pc-sound-label">Guía</span>
+                </button>
+                <button id="pwa-install-btn" class="pc-sound-toggle-btn install-btn" title="Instalar TARS como App en tu celular" aria-label="Instalar App">
+                    <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+                        <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/>
+                    </svg>
+                    <span class="pc-sound-label">App</span>
+                </button>
             </div>
             <div class="connection-info">
                 <button id="pc-selector-btn" class="chat-selector-btn pc-selector-btn" title="Elegir qué PC con Antigravity usar">
@@ -153,12 +153,12 @@
         <footer class="app-footer">
             <div id="attachment-preview-bar" class="attachment-preview-bar hidden"></div>
             <div class="input-bar">
-                <input type="file" id="file-input" multiple accept="image/*,.pdf,.txt,.py,.js,.html,.css,.json,.md,.csv,.doc,.docx" style="display: none;">
-                <button id="attach-btn" class="icon-btn attach-btn" title="Adjuntar imagen o documento">
+                <input type="file" id="file-input" multiple accept="image/*,.pdf,.txt,.py,.js,.html,.css,.json,.md,.csv,.doc,.docx" style="position: absolute; opacity: 0; width: 1px; height: 1px; z-index: -1; pointer-events: none;">
+                <label for="file-input" id="attach-btn" class="icon-btn attach-btn" title="Adjuntar imagen o documento" aria-label="Adjuntar imagen o documento">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
                         <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5a2.5 2.5 0 0 1 5 0v10.5c0 .83-.67 1.5-1.5 1.5s-1.5-.67-1.5-1.5V6H9v9.5a3 3 0 0 0 6 0V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/>
                     </svg>
-                </button>
+                </label>
                 <input type="text" id="text-input" placeholder="Escribe un mensaje o adjunta archivos..." autocomplete="off">
                 <button id="send-btn" class="icon-btn" title="Enviar mensaje">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
@@ -352,6 +352,6 @@
             </div>
         </div>
     </div>
-    <script src="/static/app.js?v=5.2"></script>
+    <script src="/static/app.js?v=5.3"></script>
 </body>
 </html>
