@@ -1,8 +1,8 @@
-const CACHE_NAME = 'tars-shell-v5.3';
+const CACHE_NAME = 'tars-shell-v5.4';
 const PRECACHE_ASSETS = [
     '/',
-    '/static/style.css?v=5.3',
-    '/static/app.js?v=5.3',
+    '/static/style.css?v=5.4',
+    '/static/app.js?v=5.4',
     '/manifest.json',
     '/static/icon-192.png'
 ];
@@ -79,12 +79,16 @@ self.addEventListener('push', (event) => {
         renotify: true,
         actions: [
             {
+                action: 'open',
+                title: 'Abrir TARS'
+            },
+            {
                 action: 'toggle_voice',
                 title: isMuted ? 'Activar voz' : 'Silenciar voz'
             },
             {
-                action: 'open',
-                title: 'Abrir TARS'
+                action: 'unsubscribe',
+                title: 'Dar de baja avisos'
             }
         ],
         data: {
@@ -99,6 +103,23 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
     const targetUrl = (event.notification.data && event.notification.data.url) || '/';
+
+    if (event.action === 'unsubscribe') {
+        event.notification.close();
+        event.waitUntil(
+            self.registration.pushManager.getSubscription().then((sub) => {
+                if (sub) {
+                    fetch('/api/push_unsubscribe', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ endpoint: sub.endpoint })
+                    }).catch(() => {});
+                    return sub.unsubscribe().catch(() => {});
+                }
+            })
+        );
+        return;
+    }
 
     if (event.action === 'toggle_voice') {
         event.notification.close();

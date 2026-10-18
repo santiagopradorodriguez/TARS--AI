@@ -130,11 +130,13 @@ function renderMarkdown(text) {
     processed = processed.replace(/^\s*[-*]\s+(.*)$/gim, '<li>$1</li>');
     processed = processed.replace(/^\s*\d+\.\s+(.*)$/gim, '<li>$1</li>');
 
-    // 9. Links markdown [texto](url)
-    processed = processed.replace(/\[(.*?)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    // 9. Links markdown [texto](url) y archivos file://
+    processed = processed.replace(/\[(.*?)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
     processed = processed.replace(/\[(.*?)\]\(file:\/\/(\/[^\)\s#]+)(?:#[^\)\s]*)?\)/g, (m, label, fpath) => {
-        return `<a href="/api/download?path=${encodeURIComponent(fpath)}" download class="inline-file-link" title="Descargar archivo">${label} ⬇</a>`;
+        return `<a href="/api/download?path=${encodeURIComponent(fpath)}" target="_blank" rel="noopener noreferrer" download class="inline-file-link" title="Descargar archivo" onclick="this.href=this.href.split('&_t=')[0]+'&_t='+Date.now()">${label} ⬇</a>`;
     });
+    // Auto-link URLs sueltas http:// o https://
+    processed = processed.replace(/(^|[^"'>])(https?:\/\/[^\s<>\)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
 
     // 10. Parrafos y saltos de linea
     processed = processed.replace(/\n{2,}/g, '</p><p>');
@@ -437,6 +439,8 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
                 a.href = item.url;
                 a.className = 'file-card';
                 a.download = fname;
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
                 a.innerHTML = `
                     <div class="file-info">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
@@ -448,6 +452,16 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
                     </svg>
                 `;
+                a.addEventListener('click', (e) => {
+                    const sep = item.url.includes('?') ? '&' : '?';
+                    a.href = `${item.url}${sep}_t=${Date.now()}`;
+                    const label = a.querySelector('.file-name');
+                    if (label) {
+                        const originalText = label.innerText;
+                        label.innerText = `Descargando ${fname}...`;
+                        setTimeout(() => { label.innerText = originalText; }, 2500);
+                    }
+                });
                 wrapper.appendChild(a);
                 mediaContainer.appendChild(wrapper);
             }
@@ -2120,6 +2134,7 @@ async function triggerPhoneNotification(rawContent, customTitle = null, stepInde
         } catch (e) {
             console.warn('Error despachando notificacion por AndroidBridge:', e);
         }
+        return;
     }
 
     if (isPushSubscribed) {
@@ -2128,7 +2143,7 @@ async function triggerPhoneNotification(rawContent, customTitle = null, stepInde
 
     if ('Notification' in window && Notification.permission === 'granted') {
         // Tag único para que Chrome reemplace en vez de apilar decenas de notificaciones "tars"
-        const notifTag = 'tars-active-notification';
+        const notifTag = 'tars-latest-notification';
         const options = {
             body: body,
             icon: '/static/icon-192.png',
@@ -2344,6 +2359,11 @@ async function syncWithAntigravity() {
             updateActivePcUI(data.active_pc);
         }
 
+        if (data.chat_id && activeChatId && data.chat_id !== activeChatId && !data.chat_changed) {
+            // Ignorar respuestas que pertenezcan a otro chat para evitar que se mezclen
+            return;
+        }
+
         if (data.chat_id) {
             activeChatId = data.chat_id;
         }
@@ -2400,6 +2420,9 @@ async function syncWithAntigravity() {
             await loadInitialChatTitle();
             if (micStatusLabel) micStatusLabel.innerText = 'Toca para hablar';
         } else if (data.has_new && data.step_index > currentSyncIndex && !renderedStepIndices.has(data.step_index)) {
+            if (data.chat_id && activeChatId && data.chat_id !== activeChatId) {
+                return;
+            }
             removeProcessingBubble();
             clearUserCancelChips();
             if (cancelProcBtn && !isRecording) cancelProcBtn.classList.remove('active-danger');
@@ -2421,6 +2444,25 @@ async function syncWithAntigravity() {
     } finally {
         isSyncing = false;
     }
+}
+
+// Si estamos dentro del shell nativo Android, desuscribir WebPush del WebView para evitar doble aviso
+if (window.AndroidBridge && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.ready.then(async (reg) => {
+        try {
+            if (reg && reg.pushManager) {
+                const sub = await reg.pushManager.getSubscription();
+                if (sub) {
+                    await fetch('/api/push_unsubscribe', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ endpoint: sub.endpoint })
+                    }).catch(() => {});
+                    await sub.unsubscribe().catch(() => {});
+                }
+            }
+        } catch (e) {}
+    }).catch(() => {});
 }
 
 loadInitialChatTitle();

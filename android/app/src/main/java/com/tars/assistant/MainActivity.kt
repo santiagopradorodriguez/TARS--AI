@@ -152,6 +152,23 @@ class MainActivity : AppCompatActivity() {
 
         webView.addJavascriptInterface(AndroidBridge(this), "AndroidBridge")
 
+        webView.setDownloadListener { url, _, _, _, _ ->
+            try {
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    data = Uri.parse(url)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(intent)
+            } catch (e: Exception) {
+                try {
+                    val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    startActivity(browserIntent)
+                } catch (e2: Exception) {
+                    Toast.makeText(this@MainActivity, "No se pudo iniciar la descarga: ${e2.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest?) {
                 request?.let {

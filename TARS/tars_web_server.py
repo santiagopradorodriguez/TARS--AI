@@ -435,11 +435,55 @@ def eval_in_antigravity(js_expr, ws_url=None):
         return None
 
 
-def get_current_antigravity_convo_id():
-    js = "window.location.pathname.replace('/c/', '').split('?')[0]"
+def clean_convo_id(raw_id, prefer_id=None):
+    if not raw_id or not isinstance(raw_id, str):
+        return ""
+    try:
+        raw_id = urllib.parse.unquote(raw_id).strip()
+    except Exception:
+        raw_id = str(raw_id).strip()
+
+    raw_id = raw_id.replace("/c/", "").split("?")[0].strip()
+    brain_dir = os.path.expanduser("~/.gemini/antigravity/brain")
+
+    # Si es exactamente una conversación existente en disco
+    if os.path.exists(os.path.join(brain_dir, raw_id)) and os.path.isdir(os.path.join(brain_dir, raw_id)):
+        return raw_id
+
+    # Buscar UUIDs estándar (36 chars)
+    uuids = re.findall(r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', raw_id, re.IGNORECASE)
+    if not uuids:
+        uuids = re.findall(r'[a-f0-9\-]{20,}', raw_id, re.IGNORECASE)
+
+    if not uuids:
+        return raw_id if os.path.exists(os.path.join(brain_dir, raw_id)) else ""
+
+    if prefer_id and prefer_id in uuids:
+        return prefer_id
+
+    # Si hay múltiples UUIDs (ej. split panes id1+id2), elegir el que exista en disco con transcript más reciente
+    best_id = uuids[0]
+    best_mtime = -1
+    for uid in uuids:
+        p = os.path.join(brain_dir, uid, ".system_generated", "logs", "transcript.jsonl")
+        if os.path.exists(p):
+            mtime = os.path.getmtime(p)
+            if mtime > best_mtime:
+                best_mtime = mtime
+                best_id = uid
+        elif os.path.exists(os.path.join(brain_dir, uid)) and best_mtime < 0:
+            best_id = uid
+
+    return best_id
+
+
+def get_current_antigravity_convo_id(prefer_id=None):
+    js = "decodeURIComponent(window.location.pathname.replace('/c/', '').split('?')[0])"
     val = eval_in_antigravity(js)
     if val and isinstance(val, str) and len(val) > 10:
-        return val.strip()
+        cleaned = clean_convo_id(val.strip(), prefer_id=prefer_id)
+        if cleaned:
+            return cleaned
     return None
 
 
@@ -585,7 +629,9 @@ def get_antigravity_chats():
 
     js_scan = """
     (() => {
-        const curId = window.location.pathname.replace('/c/', '').split('?')[0];
+        const rawPath = window.location.pathname.replace('/c/', '').split('?')[0];
+        const curIds = decodeURIComponent(rawPath).split('+').map(s => s.trim()).filter(Boolean);
+        const curId = curIds[0] || '';
         const seen = new Set();
         const found = [];
 
@@ -595,7 +641,8 @@ def get_antigravity_chats():
             seen.add(id);
             let t = (rawTitle || '').replace(/\\s+/g, ' ').trim();
             t = t.replace(/\\b(Delete|Archive|Rename|Pin|Active|Cerrar|Eliminar)\\b/gi, '').trim();
-            found.push({ id: id, title: t, active: Boolean(isAct || (id === curId)) });
+            const activeMatch = Boolean(isAct || curIds.includes(id));
+            found.push({ id: id, title: t, active: activeMatch });
         };
 
         const pills = Array.from(document.querySelectorAll('[data-testid^="convo-pill-"], [data-testid*="conversation-item"], [data-testid*="convo-item"]'));
@@ -603,7 +650,7 @@ def get_antigravity_chats():
             const testId = p.getAttribute('data-testid') || '';
             let id = testId.replace('convo-pill-', '').replace('conversation-item-', '').replace('convo-item-', '').trim();
             if (!id) id = p.getAttribute('data-conversation-id') || p.getAttribute('data-convo-id') || '';
-            if (id) add(id, p.innerText || p.getAttribute('aria-label') || '', id === curId);
+            if (id) add(id, p.innerText || p.getAttribute('aria-label') || '', curIds.includes(id));
         });
 
         const links = Array.from(document.querySelectorAll('a[href*="/c/"]'));
@@ -615,7 +662,7 @@ def get_antigravity_chats():
                     const l = a.innerText.split('\\n').map(s => s.trim()).filter(Boolean);
                     t = l[0] || '';
                 }
-                add(m[1], t, m[1] === curId);
+                add(m[1], t, curIds.includes(m[1]));
             }
         });
 
@@ -624,7 +671,7 @@ def get_antigravity_chats():
             add(curId, docT, true);
         }
 
-        return { current_id: curId, found: found };
+        return { current_ids: curIds, current_id: curId, found: found };
     })()
     """
 
@@ -635,14 +682,20 @@ def get_antigravity_chats():
         try:
             res = eval_in_antigravity(js_scan, ws_url=ws_url)
             if isinstance(res, dict):
-                c_id = res.get("current_id") or ""
+                raw_c_id = res.get("current_id") or ""
+                c_id = clean_convo_id(raw_c_id)
                 if c_id:
                     active_ids.add(c_id)
                     if not current_id:
                         current_id = c_id
+                for raw_cid in res.get("current_ids", []):
+                    clean_cid = clean_convo_id(raw_cid)
+                    if clean_cid:
+                        active_ids.add(clean_cid)
                 for ch in res.get("found", []):
-                    ch_id = ch.get("id")
+                    ch_id = clean_convo_id(ch.get("id"))
                     if ch_id:
+                        ch["id"] = ch_id
                         dom_chats.append(ch)
         except Exception:
             pass
@@ -690,6 +743,7 @@ def get_antigravity_chats():
     # Ordenar: chats activos en ventana primero, luego por mtime descendente
     merged.sort(key=lambda x: (1 if x.get("active") else 0, x.get("mtime", 0)), reverse=True)
 
+    current_id = clean_convo_id(current_id)
     if not current_id and merged:
         current_id = merged[0]["id"]
         merged[0]["active"] = True
@@ -729,10 +783,10 @@ def switch_antigravity_chat(target):
         target_title = chats[prev_idx]["title"]
 
     else:
-        # 0. Si el target ya es un UUID directo
-        import re
-        if re.match(r'^[a-f0-9\-]{20,}$', target.strip()):
-            target_id = target.strip()
+        # 0. Si el target es un UUID o ruta limpia
+        cleaned = clean_convo_id(target)
+        if cleaned:
+            target_id = cleaned
             for c in chats:
                 if c["id"] == target_id:
                     target_title = c["title"]
@@ -929,10 +983,11 @@ def send_to_antigravity_ide(text, target_chat_id=None, file_paths=None):
         try:
             # 0. Si el usuario indico un chat especifico, asegurar que la ventana de Antigravity este en ese chat
             if target_chat_id:
-                curr_id = get_current_antigravity_convo_id()
-                if curr_id and curr_id != target_chat_id:
-                    print(f"[TARS Web] Cambiando chat activo de Antigravity de {curr_id} a {target_chat_id}...")
-                    switch_antigravity_chat(target_chat_id)
+                clean_target = clean_convo_id(target_chat_id)
+                curr_id = get_current_antigravity_convo_id(prefer_id=clean_target)
+                if clean_target and curr_id and curr_id != clean_target:
+                    print(f"[TARS Web] Cambiando chat activo de Antigravity de {curr_id} a {clean_target}...")
+                    switch_antigravity_chat(clean_target)
                     time.sleep(0.5)
 
             with connect(ws_url, open_timeout=3) as ws:
@@ -1500,9 +1555,13 @@ def get_active_transcript_path(target_chat_id=None):
         return ""
     # 0. Si se solicitó un chat específico (ej. el que tiene abierto el celular), usarlo directamente
     if target_chat_id:
-        p = os.path.join(brain_dir, target_chat_id, ".system_generated", "logs", "transcript.jsonl")
-        if os.path.exists(p):
-            return p
+        clean_target = clean_convo_id(target_chat_id)
+        if clean_target:
+            p = os.path.join(brain_dir, clean_target, ".system_generated", "logs", "transcript.jsonl")
+            if os.path.exists(p):
+                return p
+        # NUNCA caer en fallback a otro chat si se pidió un target específico
+        return ""
 
     # 1. Intentar obtener el ID exacto del chat activo via CDP
     try:
@@ -1514,20 +1573,40 @@ def get_active_transcript_path(target_chat_id=None):
     except Exception as e:
         print(f"[TARS Web] Error leyendo id activo via CDP: {e}")
 
-    # 2. Fallback: buscar por mtime
-    latest_time = 0
-    latest_path = ""
+    # 2. Fallback: buscar SOLO entre chats reales del usuario (nunca subagentes ni chats ajenos)
     try:
-        for convo in os.listdir(brain_dir):
-            p = os.path.join(brain_dir, convo, ".system_generated", "logs", "transcript.jsonl")
-            if os.path.exists(p):
-                mtime = os.path.getmtime(p)
-                if mtime > latest_time:
-                    latest_time = mtime
-                    latest_path = p
+        user_chats = get_chats_from_disk()
+        if user_chats:
+            best_id = user_chats[0].get("id")
+            if best_id:
+                p = os.path.join(brain_dir, best_id, ".system_generated", "logs", "transcript.jsonl")
+                if os.path.exists(p):
+                    return p
     except Exception as e:
-        print(f"[TARS Web] Error buscando transcript activo por mtime: {e}")
-    return latest_path
+        print(f"[TARS Web] Error buscando transcript activo en chats del usuario: {e}")
+    return ""
+
+
+def get_message_by_step_index(transcript_path, step_index):
+    if not transcript_path or not os.path.exists(transcript_path):
+        return ""
+    try:
+        with open(transcript_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    if obj.get("step_index") == step_index and obj.get("type") == "PLANNER_RESPONSE":
+                        content = obj.get("content", "")
+                        if content:
+                            return content
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return ""
 
 
 def format_spanish_tool_action(t_name, args):
@@ -1764,7 +1843,44 @@ async def handle_download(request):
         clean_path = clean_path.replace("file://", "", 1)
     clean_path = clean_path.split("#")[0].strip()
 
-    # Si está activa la PC remota en Tailscale, proxear el archivo desde allá
+    # 0. Si el archivo existe localmente en esta PC, servirlo directamente
+    if os.path.exists(clean_path):
+        if os.path.isdir(clean_path):
+            folder_name = os.path.basename(clean_path.rstrip("/")) or "carpeta"
+            zip_filename = f"{folder_name}.zip"
+            zip_path = os.path.join("/tmp", f"tars_dl_{zip_filename}")
+            def _make_zip():
+                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for root, dirs, files in os.walk(clean_path):
+                        dirs[:] = [d for d in dirs if d not in (".git", "venv", "node_modules", "__pycache__")]
+                        for file in files:
+                            full_f = os.path.join(root, file)
+                            rel_f = os.path.relpath(full_f, os.path.dirname(clean_path.rstrip("/")))
+                            zf.write(full_f, rel_f)
+                return zip_path
+            await asyncio.to_thread(_make_zip)
+            return web.FileResponse(
+                zip_path,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{zip_filename}"',
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
+            )
+
+        fname = os.path.basename(clean_path)
+        return web.FileResponse(
+            clean_path,
+            headers={
+                "Content-Disposition": f'attachment; filename="{fname}"',
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
+
+    # 1. Si no existe localmente pero está activa la PC remota en Tailscale, proxear el archivo desde allá
     if is_remote_pc_active():
         rem_ip = get_active_pc_ip()
         fname = os.path.basename(clean_path.rstrip("/")) or "archivo"
@@ -1785,44 +1901,26 @@ async def handle_download(request):
             return web.Response(
                 body=body,
                 content_type=ctype,
-                headers={"Content-Disposition": f'attachment; filename="{fname}"'}
+                headers={
+                    "Content-Disposition": f'attachment; filename="{fname}"',
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
             )
         except Exception as e:
             return web.json_response({"error": f"No se pudo descargar de PC remota: {e}"}, status=404)
 
-    if not os.path.exists(clean_path):
-        return web.json_response({"error": f"Archivo no encontrado: {clean_path}"}, status=404)
+    return web.json_response({"error": f"Archivo no encontrado: {clean_path}"}, status=404)
 
-    # Si es una carpeta, empaquetarla en un .zip al vuelo
-    if os.path.isdir(clean_path):
-        folder_name = os.path.basename(clean_path.rstrip("/")) or "carpeta"
-        zip_filename = f"{folder_name}.zip"
-        zip_path = os.path.join("/tmp", f"tars_dl_{int(time.time())}_{zip_filename}")
-        def _make_zip():
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for root, dirs, files in os.walk(clean_path):
-                    dirs[:] = [d for d in dirs if d not in (".git", "venv", "node_modules", "__pycache__")]
-                    for file in files:
-                        full_f = os.path.join(root, file)
-                        rel_f = os.path.relpath(full_f, os.path.dirname(clean_path.rstrip("/")))
-                        zf.write(full_f, rel_f)
-            return zip_path
-        await asyncio.to_thread(_make_zip)
-        return web.FileResponse(
-            zip_path,
-            headers={"Content-Disposition": f'attachment; filename="{zip_filename}"'}
-        )
 
-    fname = os.path.basename(clean_path)
-    return web.FileResponse(
-        clean_path,
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'}
-    )
-
+LAST_KNOWN_IDE_CHAT = ""
 
 async def handle_sync(request):
+    global LAST_KNOWN_IDE_CHAT
     last_idx = int(request.query.get("last_index", 0))
-    client_chat_id = request.query.get("chat_id", "").strip()
+    raw_client_chat = request.query.get("chat_id", "").strip()
+    client_chat_id = clean_convo_id(raw_client_chat) if raw_client_chat else ""
     media = []
 
     if is_remote_pc_active():
@@ -1852,12 +1950,22 @@ async def handle_sync(request):
             "active_pc": get_active_pc_info()
         })
 
-    active_id = await asyncio.to_thread(get_current_antigravity_convo_id) or ""
+    active_id = await asyncio.to_thread(get_current_antigravity_convo_id, client_chat_id) or ""
     current_model = await asyncio.to_thread(get_current_antigravity_model) or ""
-    target_chat = client_chat_id or active_id
-    chat_changed = bool(client_chat_id and active_id and client_chat_id != active_id)
-    eval_chat = active_id if chat_changed else target_chat
-    return_chat_id = active_id if chat_changed else target_chat
+
+    # Detectar si el usuario en la PC cambio deliberadamente de chat en la ventana de Antigravity
+    chat_changed = False
+    if active_id and LAST_KNOWN_IDE_CHAT and active_id != LAST_KNOWN_IDE_CHAT:
+        if client_chat_id and active_id != client_chat_id:
+            chat_changed = True
+
+    if active_id:
+        LAST_KNOWN_IDE_CHAT = active_id
+
+    # Si el cliente tiene un chat activo especifico, evaluar ESTRICTAMENTE ese chat (evita mezclar chats)
+    target_chat = active_id if chat_changed else (client_chat_id or active_id)
+    eval_chat = target_chat
+    return_chat_id = target_chat
 
     latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message, eval_chat)
 
@@ -1865,10 +1973,21 @@ async def handle_sync(request):
         # Extraer imágenes y archivos generados o linkeados en la respuesta
         media = await asyncio.to_thread(collect_turn_media_and_files, latest_msg, proc_info)
 
-        # Generar TTS solo si no fue cambio de chat
+        # Generar TTS de forma completamente ASINCRONA para respuesta instantanea (<20ms)
         audio_url = None
         if not chat_changed and latest_msg:
-            audio_url = await generate_tts_file(latest_msg)
+            clean_text = extract_conversational_speech(latest_msg)
+            if clean_text in TTS_CACHE:
+                cached = TTS_CACHE[clean_text]
+                if os.path.exists(os.path.join(MEDIA_DIR, os.path.basename(cached))):
+                    audio_url = cached
+
+            if not audio_url:
+                if not get_mobile_voice_muted():
+                    # Lanzar generacion en background para que este lista cuando el navegador la solicite
+                    asyncio.create_task(generate_tts_file(latest_msg))
+                # Siempre proveer URL on-demand para el boton o reproduccion
+                audio_url = f"/api/tts?step={latest_idx}&chat_id={return_chat_id}"
 
         return web.json_response({
             "has_new": True,
@@ -1904,7 +2023,45 @@ async def handle_sync(request):
     })
 
 
+async def handle_tts(request):
+    step_str = request.query.get("step", "")
+    chat_id = clean_convo_id(request.query.get("chat_id", ""))
+    text = request.query.get("text", "")
+
+    if not text and step_str:
+        try:
+            step_idx = int(step_str)
+            t_path = get_active_transcript_path(chat_id)
+            if t_path and os.path.exists(t_path):
+                msg = get_message_by_step_index(t_path, step_idx)
+                if msg:
+                    text = msg
+        except Exception as e:
+            print(f"[TARS Web] Error recuperando texto para TTS en step {step_str}: {e}")
+
+    if not text:
+        _, latest_msg, _ = get_latest_transcript_message(chat_id)
+        text = latest_msg
+
+    if not text:
+        return web.Response(status=404, text="No hay texto disponible para TTS")
+
+    audio_url = await generate_tts_file(text)
+    if not audio_url:
+        return web.Response(status=500, text="Error generando audio TTS")
+
+    fname = os.path.basename(audio_url)
+    fpath = os.path.join(MEDIA_DIR, fname)
+    if os.path.exists(fpath):
+        return web.FileResponse(fpath, headers={
+            "Content-Type": "audio/mpeg",
+            "Cache-Control": "public, max-age=86400"
+        })
+    return web.HTTPFound(audio_url)
+
+
 def get_chat_history(convo_id, limit=10):
+    convo_id = clean_convo_id(convo_id)
     if not convo_id:
         return {"chat_id": "", "messages": [], "last_step_index": 0}
 
@@ -2930,6 +3087,7 @@ def init_app():
     app.router.add_post("/api/chat", handle_chat)
     app.router.add_post("/api/audio", handle_audio)
     app.router.add_get("/api/sync", handle_sync)
+    app.router.add_get("/api/tts", handle_tts)
     app.router.add_get("/api/download", handle_download)
     app.router.add_get("/api/integraciones/estado", handle_integraciones_estado)
     app.router.add_post("/api/integraciones/luces", handle_integraciones_luces)
@@ -3128,22 +3286,10 @@ async def watch_transcript_for_push():
         await asyncio.sleep(1.5)
         try:
             if is_remote_pc_active():
-                rem_ip = get_active_pc_ip()
-                pc_info = get_active_pc_info()
-                rem_data = await asyncio.to_thread(remote_api_request, rem_ip, f"/api/sync?last_index={LAST_NOTIFIED_STEP['idx']}", "GET", None, 3.0)
-                if isinstance(rem_data, dict) and not rem_data.get("_proxy_error"):
-                    p_info = rem_data.get("processing_info") or {}
-                    latest_idx = int(rem_data.get("step_index") or 0)
-                    latest_msg = rem_data.get("content") or ""
-                    if not p_info.get("is_processing") and latest_idx > LAST_NOTIFIED_STEP["idx"] and latest_msg:
-                        LAST_NOTIFIED_STEP["idx"] = latest_idx
-                        await asyncio.to_thread(
-                            send_web_push_all,
-                            f"TARS ({pc_info.get('name', 'PC')}) - Antigravity",
-                            latest_msg,
-                            "/",
-                            f"tars-step-{latest_idx}"
-                        )
+                # Si la PC remota está activa, esa PC maneja sus propios push notifications directamente.
+                # No duplicar notificaciones desde el nodo proxy local.
+                await asyncio.sleep(2.0)
+                continue
             else:
                 latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message)
                 if not proc_info.get("is_processing") and latest_idx > LAST_NOTIFIED_STEP["idx"] and latest_msg:
@@ -3153,7 +3299,7 @@ async def watch_transcript_for_push():
                         "TARS - Antigravity",
                         latest_msg,
                         "/",
-                        f"tars-step-{latest_idx}"
+                        "tars-latest-notification"
                     )
         except Exception as e:
             print(f"[TARS Web] Error en watch_transcript_for_push: {e}")
