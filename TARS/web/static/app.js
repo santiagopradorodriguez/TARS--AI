@@ -380,22 +380,9 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
             navigator.vibrate([40, 60, 40]);
         }
     } else {
-        clearUserCancelChips();
         const p = document.createElement('p');
         p.innerText = text;
         contentDiv.appendChild(p);
-
-        const cancelChip = document.createElement('button');
-        cancelChip.className = 'user-cancel-chip';
-        cancelChip.innerHTML = `
-            <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
-            <span>Cortar envío / IA</span>
-        `;
-        cancelChip.onclick = (e) => {
-            e.stopPropagation();
-            window.cancelCurrentProcessing();
-        };
-        contentDiv.appendChild(cancelChip);
     }
 
     const mediaList = Array.isArray(media) ? [...media] : [];
@@ -500,6 +487,9 @@ const attachmentPreviewBar = document.getElementById('attachment-preview-bar');
 let pendingAttachments = [];
 
 function renderAttachmentPreviews() {
+    if (attachBtn) {
+        attachBtn.classList.toggle('has-files', pendingAttachments.length > 0);
+    }
     if (!attachmentPreviewBar) return;
     if (pendingAttachments.length === 0) {
         attachmentPreviewBar.innerHTML = '';
@@ -2191,6 +2181,26 @@ async function toggleNotifications() {
         updateNotifyBtnUI(false);
         if (navigator.vibrate) navigator.vibrate([80]);
 
+        // 1. Dar de baja en PushManager y desuscribir en el servidor
+        if ('serviceWorker' in navigator) {
+            try {
+                const reg = await navigator.serviceWorker.ready;
+                if (reg && reg.pushManager) {
+                    const sub = await reg.pushManager.getSubscription();
+                    if (sub) {
+                        await fetch('/api/push_unsubscribe', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(sub)
+                        }).catch(() => {});
+                        await sub.unsubscribe().catch(() => {});
+                    }
+                }
+            } catch (e) {}
+        }
+        isPushSubscribed = false;
+
+        // 2. Limpiar notificaciones activas en el dispositivo
         if (swRegistration && swRegistration.getNotifications) {
             try {
                 const notifs = await swRegistration.getNotifications();
