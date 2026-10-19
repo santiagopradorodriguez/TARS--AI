@@ -272,7 +272,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun openExternalIntent(url: String) {
+    private fun resolveAbsoluteUrl(rawUrl: String): String {
+        var clean = rawUrl.trim()
+        if (clean.startsWith("file:///api/")) {
+            clean = "/" + clean.removePrefix("file://").removePrefix("/")
+        }
+        if (clean.startsWith("http://") || clean.startsWith("https://")) {
+            return clean
+        }
+        val currentBase = webView.url ?: ""
+        return if (clean.startsWith("/")) {
+            try {
+                val baseUri = Uri.parse(currentBase)
+                "${baseUri.scheme}://${baseUri.authority}$clean"
+            } catch (e: Exception) {
+                clean
+            }
+        } else {
+            clean
+        }
+    }
+
+    private fun openExternalIntent(rawUrl: String) {
+        val url = resolveAbsoluteUrl(rawUrl)
         try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
