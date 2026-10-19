@@ -743,6 +743,13 @@ def get_antigravity_chats():
     # Ordenar: chats activos en ventana primero, luego por mtime descendente
     merged.sort(key=lambda x: (1 if x.get("active") else 0, x.get("mtime", 0)), reverse=True)
 
+    local_name = format_friendly_pc_name(socket.gethostname())
+    for c in merged:
+        c["pc_id"] = "local"
+        c["pc_name"] = local_name
+        c["is_local"] = True
+        c["pc_online"] = True
+
     current_id = clean_convo_id(current_id)
     if not current_id and merged:
         current_id = merged[0]["id"]
@@ -2184,22 +2191,50 @@ def get_chat_history(convo_id, limit=10):
 
 async def handle_chat_history(request):
     chat_id = request.query.get("chat_id", "").strip()
+    pc_id = request.query.get("pc_id", "").strip()
     try:
         limit = int(request.query.get("limit", 10))
     except Exception:
         limit = 10
 
-    if is_remote_pc_active():
+    cache_dir = os.path.join(DEFAULT_CONFIG_DIR, "remote_history_cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, f"{chat_id}.json") if chat_id else ""
+
+    target_remote_ip = ""
+    my_ts = get_tailscale_ip()
+    my_loc = get_local_ip()
+    if pc_id and pc_id not in ("local", "127.0.0.1", "localhost", my_ts, my_loc):
+        target_remote_ip = pc_id
+    elif is_remote_pc_active():
+        target_remote_ip = get_active_pc_ip()
+
+    if target_remote_ip:
         import urllib.parse
-        rem_ip = get_active_pc_ip()
         qs = f"/api/chat_history?chat_id={urllib.parse.quote(chat_id)}&limit={limit}"
-        rem_data = await asyncio.to_thread(remote_api_request, rem_ip, qs, "GET", None, 12.0)
+        rem_data = await asyncio.to_thread(remote_api_request, target_remote_ip, qs, "GET", None, 5.0)
         if isinstance(rem_data, dict) and not rem_data.get("_proxy_error"):
             for msg in rem_data.get("messages", []):
                 for m in (msg.get("media") or []):
                     if isinstance(m, dict) and m.get("url") and m.get("url", "").startswith("/media/"):
-                        await asyncio.to_thread(ensure_remote_media_cached, rem_ip, m["url"])
+                        await asyncio.to_thread(ensure_remote_media_cached, target_remote_ip, m["url"])
+            if cache_file and rem_data.get("messages"):
+                try:
+                    with open(cache_file, "w") as f:
+                        json.dump(rem_data, f)
+                except Exception:
+                    pass
             return web.json_response(rem_data)
+
+        # Si la consulta remota fallo o la PC esta apagada, devolver historial en cache si existe
+        if cache_file and os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r") as f:
+                    cached_data = json.load(f)
+                    cached_data["cached_offline"] = True
+                    return web.json_response(cached_data)
+            except Exception:
+                pass
 
     if not chat_id:
         active_id = await asyncio.to_thread(get_current_antigravity_convo_id) or ""
@@ -2678,40 +2713,167 @@ async def handle_set_connection_mode(request):
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
+REMOTE_CHATS_CACHE_FILE = os.path.join(DEFAULT_CONFIG_DIR, "tars_remote_chats_cache.json")
+
+def _read_remote_chats_cache():
+    try:
+        if os.path.exists(REMOTE_CHATS_CACHE_FILE):
+            with open(REMOTE_CHATS_CACHE_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def _write_remote_chats_cache(cache_data):
+    try:
+        with open(REMOTE_CHATS_CACHE_FILE, "w") as f:
+            json.dump(cache_data, f)
+    except Exception:
+        pass
+
 async def handle_get_chats(request):
+    mode = request.query.get("mode", "").strip().lower()
+    local_data = await asyncio.to_thread(get_antigravity_chats)
+    local_chats = local_data.get("chats", [])
+    current_id = local_data.get("current_id", "")
+
+    # Si se solicita solo local (usado entre nodos para evitar bucle infinito)
+    if mode == "local_only":
+        return web.json_response(local_data)
+
+    pcs_data = await asyncio.to_thread(discover_pcs)
+    peers = pcs_data.get("pcs", [])
+    active_ip = get_active_pc_ip()
+
+    cache = _read_remote_chats_cache()
+    remote_chats_all = []
+
+    # Consultar cada PC peer conocida (Tailscale)
+    for p in peers:
+        p_ip = p.get("ip")
+        if not p_ip or p.get("is_local"):
+            continue
+        p_name = p.get("name") or format_friendly_pc_name(p.get("hostname", ""), p_ip)
+        tars_ok = bool(p.get("tars_online"))
+        fetched_chats = None
+
+        if tars_ok:
+            try:
+                rem_res = await asyncio.to_thread(remote_api_request, p_ip, "/api/chats?mode=local_only", "GET", None, 2.0)
+                if isinstance(rem_res, dict) and "chats" in rem_res:
+                    fetched_chats = rem_res.get("chats", [])
+                    cache[p_ip] = {
+                        "name": p_name,
+                        "updated_at": time.time(),
+                        "current_id": rem_res.get("current_id", ""),
+                        "chats": fetched_chats
+                    }
+                    _write_remote_chats_cache(cache)
+            except Exception:
+                pass
+
+        if fetched_chats is not None:
+            for c in fetched_chats:
+                c_copy = dict(c)
+                c_copy["pc_id"] = p_ip
+                c_copy["pc_name"] = p_name
+                c_copy["is_local"] = False
+                c_copy["pc_online"] = True
+                remote_chats_all.append(c_copy)
+        else:
+            cached_entry = cache.get(p_ip, {})
+            cached_chats = cached_entry.get("chats", [])
+            for c in cached_chats:
+                c_copy = dict(c)
+                c_copy["pc_id"] = p_ip
+                c_copy["pc_name"] = p_name
+                c_copy["is_local"] = False
+                c_copy["pc_online"] = False
+                c_copy["active"] = False
+                remote_chats_all.append(c_copy)
+
+    # Fusionar ordenando segun la PC activa
     if is_remote_pc_active():
-        rem_ip = get_active_pc_ip()
-        pc_info = get_active_pc_info()
-        rem_chats = await asyncio.to_thread(remote_api_request, rem_ip, "/api/chats", "GET", None, 8.0)
-        if isinstance(rem_chats, dict) and "chats" in rem_chats:
-            return web.json_response(rem_chats)
-        return web.json_response({
-            "current_id": "",
-            "chats": [],
-            "remote_offline": True,
-            "error": f"El servidor TARS en {pc_info.get('name', rem_ip)} ({rem_ip}:8443) no responde. Actualizalo o reinicialo en esa PC."
-        })
-    chats_data = await asyncio.to_thread(get_antigravity_chats)
-    return web.json_response(chats_data)
+        primary = [c for c in remote_chats_all if c.get("pc_id") == active_ip]
+        primary.extend(local_chats)
+        primary.extend([c for c in remote_chats_all if c.get("pc_id") != active_ip])
+        combined = primary
+        rem_active = cache.get(active_ip, {})
+        rem_cur = rem_active.get("current_id") or (combined[0]["id"] if combined else "")
+        if rem_cur:
+            current_id = rem_cur
+    else:
+        combined = list(local_chats)
+        combined.extend(remote_chats_all)
+
+    return web.json_response({
+        "current_id": current_id,
+        "active_pc": get_active_pc_info(),
+        "chats": combined
+    })
 
 async def handle_switch_chat(request):
+    global LAST_KNOWN_IDE_CHAT
     try:
         data = await request.json()
         target = data.get("target") or data.get("id") or data.get("direction") or ""
+        target_pc_id = str(data.get("pc_id") or "").strip()
         if not target:
             return web.json_response({"success": False, "error": "Debe indicar objetivo o direccion"}, status=400)
 
-        if is_remote_pc_active():
-            rem_ip = get_active_pc_ip()
-            rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/switch_chat", "POST", data)
+        # Si no se pasó pc_id explícito, buscar a qué PC pertenece en el cache o chats locales
+        cache = _read_remote_chats_cache()
+        if not target_pc_id:
+            for ip, cdata in cache.items():
+                for c in cdata.get("chats", []):
+                    if c.get("id") == target:
+                        target_pc_id = ip
+                        break
+                if target_pc_id:
+                    break
+
+        my_ts = get_tailscale_ip()
+        my_loc = get_local_ip()
+
+        # Si el chat pertenece a una PC remota
+        if target_pc_id and target_pc_id not in ("local", "127.0.0.1", "localhost", my_ts, my_loc):
+            p_name = format_friendly_pc_name("", target_pc_id)
+            if target_pc_id in cache:
+                p_name = cache[target_pc_id].get("name") or p_name
+
+            _write_tars_state({
+                "active_pc_ip": target_pc_id,
+                "active_pc_name": p_name,
+                "active_pc_hostname": target_pc_id
+            })
+            LAST_KNOWN_IDE_CHAT = ""
+
+            rem_res = await asyncio.to_thread(remote_api_request, target_pc_id, "/api/switch_chat", "POST", {"target": target})
             if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
+                rem_res["active_pc"] = get_active_pc_info()
                 return web.json_response(rem_res)
+
+            return web.json_response({
+                "success": False,
+                "offline": True,
+                "error": f"{p_name} está apagada o fuera de línea. Puedes ver el historial en caché.",
+                "active_pc": get_active_pc_info()
+            })
+
+        # Si el chat es local
+        _write_tars_state({
+            "active_pc_ip": "local",
+            "active_pc_name": format_friendly_pc_name(socket.gethostname()),
+            "active_pc_hostname": socket.gethostname()
+        })
+        LAST_KNOWN_IDE_CHAT = ""
 
         result = await asyncio.to_thread(switch_antigravity_chat, target)
         if isinstance(result, dict) and result.get("success") and result.get("id"):
             hist = await asyncio.to_thread(get_chat_history, result["id"], 10)
             result["messages"] = hist.get("messages", [])
             result["last_step_index"] = hist.get("last_step_index", 0)
+        result["active_pc"] = get_active_pc_info()
         return web.json_response(result)
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
@@ -3112,6 +3274,9 @@ def init_app():
         resp.headers["Access-Control-Allow-Origin"] = "*"
         resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        if request.path.startswith("/static/") or request.path in ("/", "/sw.js", "/manifest.json"):
+            resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+            resp.headers["Pragma"] = "no-cache"
         return resp
 
     app = web.Application(middlewares=[cors_middleware])
