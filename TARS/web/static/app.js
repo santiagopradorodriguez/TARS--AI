@@ -1685,6 +1685,10 @@ async function loadChatsList() {
         const chats = data.chats || [];
         activeChatId = data.current_id || '';
 
+        if (data.active_pc && typeof updateActivePcUI === 'function') {
+            updateActivePcUI(data.active_pc);
+        }
+
         if (chats.length === 0) {
             const msg = data.error || 'No se detectaron chats abiertos';
             chatsList.innerHTML = `<div class="empty-chats">${msg}</div>`;
@@ -1694,12 +1698,23 @@ async function loadChatsList() {
         chatsList.innerHTML = '';
         chats.forEach(chat => {
             const item = document.createElement('div');
-            item.className = `chat-item ${chat.active ? 'active' : ''}`;
+            const isOffline = chat.pc_online === false;
+            item.className = `chat-item ${chat.active ? 'active' : ''} ${isOffline ? 'chat-item-offline' : ''}`;
             
-            let badgeHtml = chat.active ? '<span class="chat-item-badge">Activo</span>' : '';
+            const pcBadgeClass = chat.is_local ? 'local' : (isOffline ? 'offline' : 'remote');
+            const pcName = chat.pc_name || (chat.is_local ? 'Local' : 'Remoto');
+            const statusTag = isOffline ? '<span class="chat-offline-tag">Offline</span>' : '';
+            const activeBadge = chat.active ? '<span class="chat-item-badge">Activo</span>' : '';
+
             item.innerHTML = `
-                <span class="chat-item-title">${chat.title}</span>
-                ${badgeHtml}
+                <div class="chat-item-header">
+                    <span class="chat-item-title">${chat.title}</span>
+                    <div class="chat-item-meta">
+                        <span class="chat-pc-badge ${pcBadgeClass}">${pcName}</span>
+                        ${statusTag}
+                        ${activeBadge}
+                    </div>
+                </div>
             `;
 
             if (chat.active && currentChatTitle) {
@@ -1707,7 +1722,7 @@ async function loadChatsList() {
             }
 
             item.addEventListener('click', () => {
-                switchAntigravityChat(chat.id);
+                switchAntigravityChat(chat.id, chat.pc_id);
             });
 
             chatsList.appendChild(item);
@@ -1750,11 +1765,15 @@ function renderChatHistory(messages, lastStepIndex) {
 }
 
 let isLoadingHistory = false;
-async function loadChatHistory(chatId) {
+async function loadChatHistory(chatId, pcId = '') {
     if (!chatId || isLoadingHistory) return;
     isLoadingHistory = true;
     try {
-        const resp = await fetch(`/api/chat_history?chat_id=${encodeURIComponent(chatId)}&limit=10`);
+        let url = `/api/chat_history?chat_id=${encodeURIComponent(chatId)}&limit=10`;
+        if (pcId) {
+            url += `&pc_id=${encodeURIComponent(pcId)}`;
+        }
+        const resp = await fetch(url);
         const data = await resp.json();
         if (data && Array.isArray(data.messages)) {
             renderChatHistory(data.messages, data.last_step_index);
@@ -1766,7 +1785,7 @@ async function loadChatHistory(chatId) {
     }
 }
 
-async function switchAntigravityChat(target) {
+async function switchAntigravityChat(target, pcId = '') {
     closeChatsModal();
     if (chatContainer) {
         chatContainer.innerHTML = `
@@ -1780,12 +1799,19 @@ async function switchAntigravityChat(target) {
         micStatusLabel.innerText = 'Cambiando chats, por favor espere...';
     }
     try {
+        const payload = { target: target };
+        if (pcId) {
+            payload.pc_id = pcId;
+        }
         const resp = await fetch('/api/switch_chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ target: target })
+            body: JSON.stringify(payload)
         });
         const res = await resp.json();
+        if (res.active_pc && typeof updateActivePcUI === 'function') {
+            updateActivePcUI(res.active_pc);
+        }
         if (res.success) {
             if (currentChatTitle) {
                 currentChatTitle.innerText = res.title;
@@ -1797,11 +1823,17 @@ async function switchAntigravityChat(target) {
             if (Array.isArray(res.messages) && res.messages.length > 0) {
                 renderChatHistory(res.messages, res.last_step_index);
             } else {
-                await loadChatHistory(activeChatId);
+                await loadChatHistory(activeChatId, pcId);
             }
 
             micStatusLabel.innerText = 'Toca para hablar';
             syncWithAntigravity();
+        } else if (res.offline) {
+            activeChatId = target;
+            await loadChatHistory(target, pcId);
+            if (micStatusLabel) {
+                micStatusLabel.innerText = 'PC fuera de línea (Historial en caché)';
+            }
         } else {
             alert(`No se pudo cambiar de chat: ${res.error || 'error desconocido'}`);
             micStatusLabel.innerText = 'Toca para hablar';
@@ -1816,6 +1848,9 @@ async function loadInitialChatTitle() {
     try {
         const resp = await fetch('/api/chats');
         const data = await resp.json();
+        if (data.active_pc && typeof updateActivePcUI === 'function') {
+            updateActivePcUI(data.active_pc);
+        }
         activeChatId = data.current_id || '';
         const chats = data.chats || [];
         const activeChat = chats.find(c => c.active || c.id === activeChatId);
@@ -1823,7 +1858,8 @@ async function loadInitialChatTitle() {
             currentChatTitle.innerText = activeChat.title;
         }
         if (activeChatId) {
-            await loadChatHistory(activeChatId);
+            const activeChatPcId = activeChat ? (activeChat.pc_id || '') : '';
+            await loadChatHistory(activeChatId, activeChatPcId);
         }
     } catch (e) {
         // Silencioso

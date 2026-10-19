@@ -1,8 +1,8 @@
-const CACHE_NAME = 'tars-shell-v6.1';
+const CACHE_NAME = 'tars-shell-v7.0';
 const PRECACHE_ASSETS = [
     '/',
-    '/static/style.css?v=6.1',
-    '/static/app.js?v=6.1',
+    '/static/style.css?v=7.0',
+    '/static/app.js?v=7.0',
     '/manifest.json',
     '/static/icon-192.png'
 ];

@@ -717,6 +717,63 @@ body {
     flex-shrink: 0;
 }
 
+.chat-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 8px;
+}
+
+.chat-item-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.chat-pc-badge {
+    font-size: 0.72rem;
+    padding: 2px 7px;
+    border-radius: 8px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.chat-pc-badge.local {
+    background-color: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.chat-pc-badge.remote {
+    background-color: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.chat-pc-badge.offline {
+    background-color: rgba(156, 163, 175, 0.15);
+    color: #9ca3af;
+    border: 1px solid rgba(156, 163, 175, 0.3);
+}
+
+.chat-offline-tag {
+    font-size: 0.68rem;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background-color: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.chat-item-offline {
+    opacity: 0.75;
+}
+
 .loading-chats, .empty-chats {
     text-align: center;
     color: var(--text-muted);
