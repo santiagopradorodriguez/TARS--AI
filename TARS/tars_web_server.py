@@ -1327,7 +1327,14 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
 async def handle_index(request):
     index_path = os.path.join(WEB_DIR, "index.html")
     if os.path.exists(index_path):
-        return web.FileResponse(index_path)
+        return web.FileResponse(
+            index_path,
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
     return web.Response(text="Interfaz de TARS no encontrada", status=404)
 
 async def handle_chat(request):
