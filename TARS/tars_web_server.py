@@ -1388,15 +1388,17 @@ async def handle_chat(request):
                 rem_ip,
                 "/api/chat",
                 method="POST",
-                json_body={"text": prompt_to_send, "chat_id": client_chat_id}
+                json_body={"text": prompt_to_send, "chat_id": client_chat_id},
+                timeout=6.0
             )
-            if isinstance(rem_res, dict):
+            if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
                 if rem_res.get("audio_url"):
                     await asyncio.to_thread(ensure_remote_media_cached, rem_ip, rem_res["audio_url"])
                 for m in (rem_res.get("media") or []):
                     if isinstance(m, dict) and m.get("url"):
                         await asyncio.to_thread(ensure_remote_media_cached, rem_ip, m["url"])
                 return web.json_response(rem_res)
+            # Si falló la PC remota, continúa abajo y ejecuta la tarea en la PC local de inmediato
 
         # Verificacion de integraciones directas (Luces Tuya y Amigos de la Heladera)
         if user_text:
@@ -1999,18 +2001,8 @@ async def handle_sync(request):
                     if isinstance(m, dict) and m.get("url") and m.get("url", "").startswith("/media/"):
                         await asyncio.to_thread(ensure_remote_media_cached, rem_ip, m["url"])
             return web.json_response(rem_data)
-        return web.json_response({
-            "has_new": False,
-            "step_index": last_idx,
-            "chat_id": client_chat_id,
-            "chat_changed": False,
-            "remote_offline": True,
-            "pc_audio_muted": get_pc_sound_muted(),
-            "mobile_voice_muted": get_mobile_voice_muted(),
-            "tars_mode": get_tars_mode(),
-            "local_mode": get_connection_mode(),
-            "active_pc": get_active_pc_info()
-        })
+        # Si falló la PC remota, remote_api_request ya la marcó inalcanzable.
+        # Caemos de inmediato a la sincronización de la PC local sin colgar al cliente.
 
     active_id = await asyncio.to_thread(get_current_antigravity_convo_id, client_chat_id) or ""
     current_model = await asyncio.to_thread(get_current_antigravity_model) or ""
@@ -2323,7 +2315,17 @@ def check_tcp_port(ip, port=8443, timeout=0.45):
     finally:
         s.close()
 
-def remote_api_request(remote_ip, path, method="GET", json_body=None, timeout=20.0):
+def mark_remote_pc_unreachable(remote_ip):
+    curr_ip = get_active_pc_ip()
+    if curr_ip == remote_ip and curr_ip not in ("local", "127.0.0.1", ""):
+        print(f"[TARS Web] PC remota {remote_ip} no responde. Auto-failover a modo local.")
+        _write_tars_state({
+            "active_pc_ip": "local",
+            "active_pc_name": format_friendly_pc_name(socket.gethostname()),
+            "active_pc_hostname": socket.gethostname()
+        })
+
+def remote_api_request(remote_ip, path, method="GET", json_body=None, timeout=4.0):
     ctx = ssl._create_unverified_context()
     url = f"https://{remote_ip}:8443{path}"
     data_bytes = None
@@ -2338,6 +2340,7 @@ def remote_api_request(remote_ip, path, method="GET", json_body=None, timeout=20
             return json.loads(raw)
     except Exception as e:
         print(f"[TARS Web] Error proxy a PC remota ({remote_ip}{path}): {e}")
+        mark_remote_pc_unreachable(remote_ip)
         return {"_proxy_error": str(e)}
 
 def ensure_remote_media_cached(remote_ip, media_url):
@@ -3507,10 +3510,15 @@ async def watch_transcript_for_push():
         await asyncio.sleep(1.5)
         try:
             if is_remote_pc_active():
-                # Si la PC remota está activa, esa PC maneja sus propios push notifications directamente.
-                # No duplicar notificaciones desde el nodo proxy local.
-                await asyncio.sleep(2.0)
-                continue
+                # Si la PC remota está configurada, comprobar que siga online
+                rem_ip = get_active_pc_ip()
+                is_alive = await asyncio.to_thread(check_tcp_port, rem_ip, 8443, 0.45)
+                if not is_alive:
+                    mark_remote_pc_unreachable(rem_ip)
+                else:
+                    # La PC remota maneja sus propios push notifications directamente
+                    await asyncio.sleep(2.0)
+                    continue
             else:
                 latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message)
                 if not proc_info.get("is_processing") and latest_idx > LAST_NOTIFIED_STEP["idx"] and latest_msg:

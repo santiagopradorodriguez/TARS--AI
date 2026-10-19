@@ -2209,6 +2209,9 @@ function urlBase64ToUint8Array(base64String) {
 }
 
 async function setupWebPushSubscription() {
+    if (window.AndroidBridge || (navigator.userAgent && navigator.userAgent.includes('TARS-Android-Shell'))) {
+        return false; // La app Android nativa nunca usa WebPush de Chrome / FCM
+    }
     if (!('serviceWorker' in navigator)) return false;
     try {
         swRegistration = await navigator.serviceWorker.register('/sw.js');
@@ -2244,6 +2247,14 @@ let isPushSubscribed = false;
 const NOTIF_STORAGE_KEY = 'tars_notifications_enabled';
 
 function areNotificationsEnabled() {
+    // Si estamos dentro del shell nativo Android, autocurar estado inicial si fue apagado por error
+    if (window.AndroidBridge) {
+        if (localStorage.getItem('tars_android_notif_v1_fixed') !== 'true') {
+            localStorage.setItem(NOTIF_STORAGE_KEY, 'true');
+            localStorage.setItem('tars_android_notif_v1_fixed', 'true');
+            return true;
+        }
+    }
     const val = localStorage.getItem(NOTIF_STORAGE_KEY);
     if (val === null) {
         return ('Notification' in window && Notification.permission === 'granted') ||
@@ -2255,9 +2266,13 @@ function areNotificationsEnabled() {
 function updateNotifyBtnUI(pushActive = false) {
     if (!notifyToggleBtn) return;
     const enabled = areNotificationsEnabled();
-    const hasPermission = pushActive ||
-        ('Notification' in window && Notification.permission === 'granted') ||
-        (window.AndroidBridge && typeof window.AndroidBridge.showNotification === 'function');
+    let hasPermission = false;
+    if (window.AndroidBridge) {
+        hasPermission = (typeof window.AndroidBridge.isNotificationPermissionGranted === 'function') ?
+            window.AndroidBridge.isNotificationPermissionGranted() : true;
+    } else {
+        hasPermission = pushActive || ('Notification' in window && Notification.permission === 'granted');
+    }
 
     if (enabled && hasPermission) {
         notifyToggleBtn.classList.add('active');
@@ -2268,7 +2283,7 @@ function updateNotifyBtnUI(pushActive = false) {
     }
 }
 updateNotifyBtnUI();
-if (areNotificationsEnabled() && 'Notification' in window && Notification.permission === 'granted') {
+if (areNotificationsEnabled() && 'Notification' in window && Notification.permission === 'granted' && !window.AndroidBridge) {
     setupWebPushSubscription();
 }
 
@@ -2432,13 +2447,24 @@ async function toggleNotifications() {
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
 
     if (window.AndroidBridge) {
-        if (typeof window.AndroidBridge.requestNotificationPermission === 'function') {
-            window.AndroidBridge.requestNotificationPermission();
+        let hasPerm = true;
+        if (typeof window.AndroidBridge.isNotificationPermissionGranted === 'function') {
+            hasPerm = window.AndroidBridge.isNotificationPermissionGranted();
+        }
+        if (!hasPerm) {
+            if (typeof window.AndroidBridge.requestNotificationPermission === 'function') {
+                window.AndroidBridge.requestNotificationPermission();
+            }
+            if (typeof window.AndroidBridge.openNotificationSettings === 'function') {
+                showWhatsAppToast('Ajustes de Notificación', 'Abrí los ajustes de Android para permitir notificaciones de TARS.');
+                window.AndroidBridge.openNotificationSettings();
+                return;
+            }
         }
         updateNotifyBtnUI(true);
-        showWhatsAppToast('TARS Android', 'Notificaciones activadas.');
+        showWhatsAppToast('TARS Android', 'Notificaciones nativas activadas (sin duplicados de Google).');
         if (typeof window.AndroidBridge.showNotification === 'function') {
-            window.AndroidBridge.showNotification('TARS', 'Notificaciones activadas correctamente.');
+            window.AndroidBridge.showNotification('TARS', '✅ Notificaciones nativas activadas (sin duplicados).');
         }
         return;
     }
