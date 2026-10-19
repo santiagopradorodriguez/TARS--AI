@@ -105,6 +105,8 @@ class MainActivity : AppCompatActivity() {
         filePathCallback = null
     }
 
+    private var pageLoadWatchdogJob: Job? = null
+
     companion object {
         private const val PREFS_NAME = "tars_app_config"
         private const val KEY_LOCAL_IP = "local_ip"
@@ -122,6 +124,14 @@ class MainActivity : AppCompatActivity() {
         swipeRefresh = findViewById(R.id.swipeRefresh)
         loadingLayout = findViewById(R.id.loadingLayout)
         loadingText = findViewById(R.id.loadingText)
+
+        findViewById<View>(R.id.btnCancelConnecting)?.setOnClickListener {
+            pageLoadWatchdogJob?.cancel()
+            loadingLayout.visibility = View.GONE
+            val savedLocal = prefs.getString(KEY_LOCAL_IP, "") ?: ""
+            val savedTs = prefs.getString(KEY_TS_DOMAIN, "") ?: ""
+            showConnectionFailedDialog(if (savedLocal.isNotBlank()) savedLocal else savedTs)
+        }
 
         setupWebView()
         setupBackNavigation()
@@ -174,6 +184,7 @@ class MainActivity : AppCompatActivity() {
 
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                 if (newProgress >= 85) {
+                    pageLoadWatchdogJob?.cancel()
                     loadingLayout.visibility = View.GONE
                     swipeRefresh.isRefreshing = false
                 }
@@ -238,6 +249,7 @@ class MainActivity : AppCompatActivity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
+                pageLoadWatchdogJob?.cancel()
                 loadingLayout.visibility = View.GONE
                 swipeRefresh.isRefreshing = false
             }
@@ -255,6 +267,7 @@ class MainActivity : AppCompatActivity() {
 
             override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
                 super.onReceivedError(view, errorCode, description, failingUrl)
+                pageLoadWatchdogJob?.cancel()
                 loadingLayout.visibility = View.GONE
                 swipeRefresh.isRefreshing = false
                 showConnectionFailedDialog(failingUrl ?: "")
@@ -264,6 +277,7 @@ class MainActivity : AppCompatActivity() {
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                 super.onReceivedError(view, request, error)
                 if (request?.isForMainFrame == true) {
+                    pageLoadWatchdogJob?.cancel()
                     loadingLayout.visibility = View.GONE
                     swipeRefresh.isRefreshing = false
                     showConnectionFailedDialog(request.url?.toString() ?: "")
@@ -394,6 +408,16 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun isNotificationPermissionGranted(): Boolean {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (!notificationManager.areNotificationsEnabled()) {
+                return false
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = notificationManager.getNotificationChannel("tars_messages_channel")
+                if (channel != null && channel.importance == NotificationManager.IMPORTANCE_NONE) {
+                    return false
+                }
+            }
             return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
             } else {
@@ -412,6 +436,34 @@ class MainActivity : AppCompatActivity() {
                             RECORD_AUDIO_PERMISSION_CODE + 1
                         )
                     }
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun openNotificationSettings() {
+            runOnUiThread {
+                try {
+                    val intent = Intent().apply {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            action = android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                            putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
+                        } else {
+                            action = "android.settings.APP_NOTIFICATION_SETTINGS"
+                            putExtra("app_package", packageName)
+                            putExtra("app_uid", applicationInfo.uid)
+                        }
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    try {
+                        val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.fromParts("package", packageName, null)
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        startActivity(intent)
+                    } catch (e2: Exception) {}
                 }
             }
         }
@@ -597,40 +649,62 @@ class MainActivity : AppCompatActivity() {
         val targetLocal = normalizeUrl(localIp)
         val targetTs = normalizeUrl(tsDomain)
 
+        pageLoadWatchdogJob?.cancel()
         loadingLayout.visibility = View.VISIBLE
         loadingText.text = getString(R.string.connecting)
 
         activityScope.launch {
             val chosenUrl = withContext(Dispatchers.IO) {
-                // 1. Probar la IP local guardada
-                if (targetLocal.isNotBlank() && testEndpointReachable(targetLocal, timeoutMs = 600)) {
-                    return@withContext targetLocal
-                }
-                // 2. Probar el dominio Tailscale guardado
-                if (targetTs.isNotBlank() && testEndpointReachable(targetTs, timeoutMs = 750)) {
-                    return@withContext targetTs
-                }
+                // Lista de candidatos ordenada
+                val candidates = mutableListOf<String>()
+                if (targetLocal.isNotBlank()) candidates.add(targetLocal)
+                if (targetTs.isNotBlank() && !candidates.contains(targetTs)) candidates.add(targetTs)
 
-                // 3. Probar servidores conocidos alternativos si el configurado está offline
-                val knownCandidates = listOf(
+                val known = listOf(
                     "https://192.168.1.19:8443", // Lenovo Yoga Local
                     "https://100.115.244.2:8443", // Lenovo Yoga Tailscale
                     "https://192.168.1.59:8443", // Pop!_OS Local
                     "https://100.118.12.94:8443"  // Pop!_OS Tailscale
                 )
-                for (cand in knownCandidates) {
-                    if (cand != targetLocal && cand != targetTs) {
-                        if (testEndpointReachable(cand, timeoutMs = 500)) {
-                            return@withContext cand
-                        }
+                for (k in known) {
+                    if (!candidates.contains(k)) candidates.add(k)
+                }
+
+                // Sondeo concurrente en paralelo para conexión ultrarrápida (<500ms)
+                val deferredProbes = candidates.map { url ->
+                    async {
+                        val isLocal = url.contains("192.168.") || url.contains("127.0.0.1")
+                        val timeout = if (isLocal) 500 else 750
+                        if (testEndpointReachable(url, timeoutMs = timeout)) url else null
                     }
                 }
 
-                null
+                val reachable = deferredProbes.awaitAll().filterNotNull()
+                if (reachable.isEmpty()) return@withContext null
+
+                // Preferencias: 1) local guardado si respondió, 2) TS guardado si respondió, 3) primer local disponible, 4) primer TS
+                if (targetLocal in reachable) return@withContext targetLocal
+                if (targetTs in reachable) return@withContext targetTs
+
+                val firstLocal = reachable.firstOrNull { it.contains("192.168.") }
+                firstLocal ?: reachable.first()
             }
 
             if (chosenUrl != null && chosenUrl.isNotBlank()) {
                 webView.loadUrl(chosenUrl)
+                // Watchdog: si después de 3.5s sigue el cartel de conectando, forzar escape
+                pageLoadWatchdogJob?.cancel()
+                pageLoadWatchdogJob = activityScope.launch {
+                    kotlinx.coroutines.delay(3500)
+                    if (loadingLayout.visibility == View.VISIBLE) {
+                        loadingLayout.visibility = View.GONE
+                        swipeRefresh.isRefreshing = false
+                        val curUrl = webView.url ?: ""
+                        if (curUrl.isBlank() || curUrl == "about:blank") {
+                            showConnectionFailedDialog(chosenUrl)
+                        }
+                    }
+                }
             } else {
                 loadingLayout.visibility = View.GONE
                 showConnectionFailedDialog(if (targetLocal.isNotBlank()) targetLocal else targetTs)
