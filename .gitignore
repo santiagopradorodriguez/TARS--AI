@@ -23,3 +23,7 @@ TARS/tars_state.json
 # Configuracion de red local dinamica (IPs privadas)
 connection_config.js
 TARS/web/static/connection_config.js
+
+# Binarios compilados
+*.apk
+android/gradle/wrapper/gradle-wrapper.jar

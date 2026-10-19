@@ -1874,6 +1874,7 @@ async def handle_download(request):
             clean_path,
             headers={
                 "Content-Disposition": f'attachment; filename="{fname}"',
+                "Content-Type": "application/octet-stream",
                 "Cache-Control": "no-cache, no-store, must-revalidate",
                 "Pragma": "no-cache",
                 "Expires": "0"
@@ -1900,7 +1901,7 @@ async def handle_download(request):
             body, ctype = await asyncio.to_thread(_fetch_rem_file)
             return web.Response(
                 body=body,
-                content_type=ctype,
+                content_type="application/octet-stream",
                 headers={
                     "Content-Disposition": f'attachment; filename="{fname}"',
                     "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -1912,6 +1913,53 @@ async def handle_download(request):
             return web.json_response({"error": f"No se pudo descargar de PC remota: {e}"}, status=404)
 
     return web.json_response({"error": f"Archivo no encontrado: {clean_path}"}, status=404)
+
+
+async def handle_download_app(request):
+    """
+    Sirve directamente el APK oficial de TARS Assistant para Android.
+    Prioriza el archivo local y si no existe lo descarga de GitHub releases.
+    """
+    apk_candidates = [
+        os.path.join(STATIC_DIR, "TARS-Assistant.apk"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "static", "TARS-Assistant.apk"),
+        os.path.join(BASE_DIR, "web", "static", "TARS-Assistant.apk"),
+        "/tmp/TARS-Assistant.apk"
+    ]
+    apk_path = None
+    for cand in apk_candidates:
+        if os.path.exists(cand) and os.path.getsize(cand) > 1000000:
+            apk_path = cand
+            break
+
+    if not apk_path:
+        github_url = "https://github.com/santiagopradorodriguez/TARS--AI/releases/latest/download/TARS-Assistant.apk"
+        tmp_target = "/tmp/TARS-Assistant.apk"
+        def _fetch_github_apk():
+            try:
+                import urllib.request
+                req = urllib.request.Request(github_url, headers={"User-Agent": "TARS-Server/1.0"})
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    with open(tmp_target, "wb") as out_f:
+                        out_f.write(resp.read())
+                return tmp_target if os.path.exists(tmp_target) else None
+            except Exception as e:
+                logger.error(f"Error descargando APK de GitHub: {e}")
+                return None
+        apk_path = await asyncio.to_thread(_fetch_github_apk)
+
+    if apk_path and os.path.exists(apk_path):
+        return web.FileResponse(
+            apk_path,
+            headers={
+                "Content-Type": "application/vnd.android.package-archive",
+                "Content-Disposition": 'attachment; filename="TARS-Assistant.apk"',
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
+    return web.json_response({"error": "APK no disponible en este momento"}, status=404)
 
 
 LAST_KNOWN_IDE_CHAT = ""
@@ -3089,6 +3137,7 @@ def init_app():
     app.router.add_get("/api/sync", handle_sync)
     app.router.add_get("/api/tts", handle_tts)
     app.router.add_get("/api/download", handle_download)
+    app.router.add_get("/api/download_app", handle_download_app)
     app.router.add_get("/api/integraciones/estado", handle_integraciones_estado)
     app.router.add_post("/api/integraciones/luces", handle_integraciones_luces)
     app.router.add_get("/api/integraciones/heladera", handle_integraciones_heladera)

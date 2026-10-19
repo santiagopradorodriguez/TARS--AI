@@ -148,25 +148,14 @@ class MainActivity : AppCompatActivity() {
         s.allowFileAccess = true
         s.cacheMode = WebSettings.LOAD_DEFAULT
         s.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        s.setSupportMultipleWindows(true)
+        s.javaScriptCanOpenWindowsAutomatically = true
         s.userAgentString = s.userAgentString + " TARS-Android-Shell/1.0"
 
         webView.addJavascriptInterface(AndroidBridge(this), "AndroidBridge")
 
         webView.setDownloadListener { url, _, _, _, _ ->
-            try {
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    data = Uri.parse(url)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                startActivity(intent)
-            } catch (e: Exception) {
-                try {
-                    val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                    startActivity(browserIntent)
-                } catch (e2: Exception) {
-                    Toast.makeText(this@MainActivity, "No se pudo iniciar la descarga: ${e2.message}", Toast.LENGTH_SHORT).show()
-                }
-            }
+            openExternalIntent(url)
         }
 
         webView.webChromeClient = object : WebChromeClient() {
@@ -211,6 +200,33 @@ class MainActivity : AppCompatActivity() {
                     return false
                 }
             }
+
+            override fun onCreateWindow(
+                view: WebView?,
+                isDialog: Boolean,
+                isUserGesture: Boolean,
+                resultMsg: android.os.Message?
+            ): Boolean {
+                val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                val tempWebView = WebView(this@MainActivity)
+                tempWebView.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                        val url = request?.url?.toString() ?: return false
+                        openExternalIntent(url)
+                        return true
+                    }
+
+                    @Deprecated("Deprecated in Java")
+                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                        if (url == null) return false
+                        openExternalIntent(url)
+                        return true
+                    }
+                }
+                transport.webView = tempWebView
+                resultMsg.sendToTarget()
+                return true
+            }
         }
 
         webView.webViewClient = object : WebViewClient() {
@@ -224,6 +240,17 @@ class MainActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 loadingLayout.visibility = View.GONE
                 swipeRefresh.isRefreshing = false
+            }
+
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val uri = request?.url ?: return false
+                return handleUriNavigation(uri)
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                if (url == null) return false
+                return handleUriNavigation(Uri.parse(url))
             }
 
             override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
@@ -243,6 +270,51 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun openExternalIntent(url: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            try {
+                val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                startActivity(browserIntent)
+            } catch (e2: Exception) {
+                Toast.makeText(this@MainActivity, "No se pudo abrir el enlace: ${e2.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun handleUriNavigation(uri: Uri): Boolean {
+        val urlStr = uri.toString()
+        val scheme = uri.scheme?.lowercase() ?: return false
+        if (scheme == "intent") {
+            try {
+                val intent = Intent.parseUri(urlStr, Intent.URI_INTENT_SCHEME)
+                startActivity(intent)
+                return true
+            } catch (e: Exception) {
+                return true
+            }
+        }
+        if (urlStr.endsWith(".apk") || uri.path?.contains("/api/download") == true) {
+            openExternalIntent(urlStr)
+            return true
+        }
+        val host = uri.host ?: ""
+        val isTarsHost = host.contains("192.168.") ||
+                host.contains("100.") ||
+                host.contains("127.0.0.1") ||
+                host.contains("localhost") ||
+                host.contains("ts.net")
+        if (!isTarsHost && (scheme == "http" || scheme == "https")) {
+            openExternalIntent(urlStr)
+            return true
+        }
+        return false
     }
 
     private fun setupBackNavigation() {
@@ -341,6 +413,20 @@ class MainActivity : AppCompatActivity() {
                 stopNativeWakeWord()
             }
             return true
+        }
+
+        @JavascriptInterface
+        fun openUrl(url: String) {
+            runOnUiThread {
+                openExternalIntent(url)
+            }
+        }
+
+        @JavascriptInterface
+        fun downloadFile(url: String, filename: String) {
+            runOnUiThread {
+                openExternalIntent(url)
+            }
         }
     }
 

@@ -72,6 +72,142 @@ function escapeHtml(str) {
         .replace(/'/g, '&#039;');
 }
 
+const isAndroidApp = Boolean(window.AndroidBridge || (navigator.userAgent && navigator.userAgent.includes('TARS-Android-Shell')));
+
+function triggerFileDownload(url, filename) {
+    const sep = url.includes('?') ? '&' : '?';
+    const finalUrl = `${url}${sep}_dl=${Date.now()}`;
+
+    // Feedback visual en la tarjeta de archivo correspondiente
+    const fileLabels = document.querySelectorAll('.file-card .file-name');
+    fileLabels.forEach(lbl => {
+        if (filename && lbl.innerText.includes(filename)) {
+            const original = lbl.innerText;
+            lbl.innerText = `Descargando ${filename}...`;
+            setTimeout(() => { lbl.innerText = original; }, 2500);
+        }
+    });
+
+    if (typeof showWhatsAppToast === 'function') {
+        showWhatsAppToast('DESCARGANDO ARCHIVO', `${filename || 'Archivo'} iniciando descarga...`);
+    }
+
+    // 1. Si la app nativa tiene puente nativo downloadFile (v1.0.6+)
+    if (window.AndroidBridge && typeof window.AndroidBridge.downloadFile === 'function') {
+        window.AndroidBridge.downloadFile(finalUrl, filename || '');
+        return;
+    }
+
+    // 2. Si estamos dentro del shell nativo de Android (WebView)
+    if (isAndroidApp) {
+        // En Android WebView NUNCA usar target="_blank"
+        const tempLink = document.createElement('a');
+        tempLink.href = finalUrl;
+        if (filename) tempLink.download = filename;
+        document.body.appendChild(tempLink);
+        tempLink.click();
+        setTimeout(() => {
+            try { document.body.removeChild(tempLink); } catch (e) {}
+        }, 1200);
+        return;
+    }
+
+    // 3. En navegador estándar (Chrome PC o celular)
+    try {
+        let iframe = document.getElementById('tars-dl-frame');
+        if (!iframe) {
+            iframe = document.createElement('iframe');
+            iframe.id = 'tars-dl-frame';
+            iframe.style.position = 'fixed';
+            iframe.style.top = '-9999px';
+            iframe.style.left = '-9999px';
+            iframe.style.width = '1px';
+            iframe.style.height = '1px';
+            iframe.style.border = 'none';
+            document.body.appendChild(iframe);
+        }
+        iframe.src = finalUrl;
+    } catch (e) {
+        const fallbackLink = document.createElement('a');
+        fallbackLink.href = finalUrl;
+        if (filename) fallbackLink.download = filename;
+        document.body.appendChild(fallbackLink);
+        fallbackLink.click();
+        setTimeout(() => {
+            try { document.body.removeChild(fallbackLink); } catch (e2) {}
+        }, 1200);
+    }
+}
+
+function showExternalLinkModal(url) {
+    let modal = document.getElementById('external-link-modal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'external-link-modal';
+        modal.className = 'modal-backdrop';
+        modal.innerHTML = `
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3>Enlace externo</h3>
+                    <button class="modal-close-btn" id="close-ext-link-modal">&times;</button>
+                </div>
+                <div class="modal-body" style="padding: 16px;">
+                    <p style="margin-bottom: 12px; color: var(--text-secondary, #94a3b8); font-size: 14px;">
+                        Vas a abrir un enlace externo:
+                    </p>
+                    <div id="ext-link-display" style="word-break: break-all; background: rgba(255,255,255,0.06); padding: 10px; border-radius: 8px; font-family: monospace; font-size: 13px; margin-bottom: 16px; color: var(--accent-primary, #60a5fa);"></div>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <button id="ext-copy-link-btn" class="modal-btn secondary" style="flex: 1; min-width: 130px; padding: 10px; border-radius: 8px; cursor: pointer;">
+                            📋 Copiar enlace
+                        </button>
+                        <button id="ext-open-link-btn" class="modal-btn primary" style="flex: 1; min-width: 130px; padding: 10px; border-radius: 8px; cursor: pointer;">
+                            🌐 Abrir en navegador
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+
+        modal.querySelector('#close-ext-link-modal').addEventListener('click', () => {
+            modal.classList.remove('active');
+        });
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) modal.classList.remove('active');
+        });
+    }
+
+    const display = modal.querySelector('#ext-link-display');
+    if (display) display.innerText = url;
+
+    const copyBtn = modal.querySelector('#ext-copy-link-btn');
+    copyBtn.onclick = async () => {
+        try {
+            await navigator.clipboard.writeText(url);
+            copyBtn.innerText = '✅ ¡Copiado!';
+            setTimeout(() => { copyBtn.innerText = '📋 Copiar enlace'; }, 2000);
+            if (typeof showWhatsAppToast === 'function') {
+                showWhatsAppToast('ENLACE COPIADO', 'Pegalo en Chrome para abrirlo.');
+            }
+        } catch (e) {
+            prompt('Copia este enlace:', url);
+        }
+    };
+
+    const openBtn = modal.querySelector('#ext-open-link-btn');
+    openBtn.onclick = () => {
+        modal.classList.remove('active');
+        try {
+            const cleanUrl = url.replace(/^https?:\/\//i, '');
+            window.location.href = `intent://${cleanUrl}#Intent;scheme=https;action=android.intent.action.VIEW;end;`;
+        } catch (e) {
+            window.location.href = url;
+        }
+    };
+
+    modal.classList.add('active');
+}
+
 window.copyCode = function(btn) {
     const code = btn.closest('.code-block-wrapper').querySelector('code').innerText;
     navigator.clipboard.writeText(code).then(() => {
@@ -131,12 +267,17 @@ function renderMarkdown(text) {
     processed = processed.replace(/^\s*\d+\.\s+(.*)$/gim, '<li>$1</li>');
 
     // 9. Links markdown [texto](url) y archivos file://
-    processed = processed.replace(/\[(.*?)\]\((https?:\/\/[^\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    processed = processed.replace(/\[(.*?)\]\((https?:\/\/[^\)]+)\)/g, (match, label, url) => {
+        return `<a href="${url}" class="chat-external-link" rel="noopener noreferrer">${label}</a>`;
+    });
     processed = processed.replace(/\[(.*?)\]\(file:\/\/(\/[^\)\s#]+)(?:#[^\)\s]*)?\)/g, (m, label, fpath) => {
-        return `<a href="/api/download?path=${encodeURIComponent(fpath)}" target="_blank" rel="noopener noreferrer" download class="inline-file-link" title="Descargar archivo" onclick="this.href=this.href.split('&_t=')[0]+'&_t='+Date.now()">${label} ⬇</a>`;
+        const fname = fpath.split('/').pop() || 'archivo';
+        return `<a href="/api/download?path=${encodeURIComponent(fpath)}" download="${escapeHtml(fname)}" class="inline-file-link" title="Descargar archivo">${label} ⬇</a>`;
     });
     // Auto-link URLs sueltas http:// o https://
-    processed = processed.replace(/(^|[^"'>])(https?:\/\/[^\s<>\)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+    processed = processed.replace(/(^|[^"'>])(https?:\/\/[^\s<>\)]+)/g, (match, prefix, url) => {
+        return `${prefix}<a href="${url}" class="chat-external-link" rel="noopener noreferrer">${url}</a>`;
+    });
 
     // 10. Parrafos y saltos de linea
     processed = processed.replace(/\n{2,}/g, '</p><p>');
@@ -439,8 +580,6 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
                 a.href = item.url;
                 a.className = 'file-card';
                 a.download = fname;
-                a.target = '_blank';
-                a.rel = 'noopener noreferrer';
                 a.innerHTML = `
                     <div class="file-info">
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
@@ -453,14 +592,9 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
                     </svg>
                 `;
                 a.addEventListener('click', (e) => {
-                    const sep = item.url.includes('?') ? '&' : '?';
-                    a.href = `${item.url}${sep}_t=${Date.now()}`;
-                    const label = a.querySelector('.file-name');
-                    if (label) {
-                        const originalText = label.innerText;
-                        label.innerText = `Descargando ${fname}...`;
-                        setTimeout(() => { label.innerText = originalText; }, 2500);
-                    }
+                    e.preventDefault();
+                    e.stopPropagation();
+                    triggerFileDownload(item.url, fname);
                 });
                 wrapper.appendChild(a);
                 mediaContainer.appendChild(wrapper);
@@ -2469,4 +2603,51 @@ loadInitialChatTitle();
 loadInitialConnectionMode();
 setInterval(syncWithAntigravity, 1500);
 syncWithAntigravity();
+
+// Interceptor global de enlaces y descargas para compatibilidad universal (Android WebView + Chrome)
+document.addEventListener('click', (e) => {
+    const a = e.target.closest('a');
+    if (!a) return;
+
+    const href = a.getAttribute('href');
+    if (!href || href === '#' || href.startsWith('javascript:')) return;
+
+    // 1. Descarga de archivos locales (/api/download o /api/download_app o clases de archivo)
+    if (href.startsWith('/api/download') || a.classList.contains('inline-file-link') || a.classList.contains('file-card') || a.hasAttribute('download')) {
+        e.preventDefault();
+        e.stopPropagation();
+        const fname = a.getAttribute('download') || a.innerText.replace(/⬇/g, '').trim() || 'archivo';
+        triggerFileDownload(href, fname);
+        return;
+    }
+
+    // 2. Enlaces a APK de TARS (directo de GitHub o del servidor)
+    if (href.includes('TARS-Assistant.apk') || href.endsWith('.apk')) {
+        e.preventDefault();
+        e.stopPropagation();
+        triggerFileDownload('/api/download_app', 'TARS-Assistant.apk');
+        return;
+    }
+
+    // 3. Enlaces externos web (https://...)
+    if (href.startsWith('http://') || href.startsWith('https://')) {
+        if (window.AndroidBridge && typeof window.AndroidBridge.openUrl === 'function') {
+            e.preventDefault();
+            e.stopPropagation();
+            window.AndroidBridge.openUrl(href);
+            return;
+        }
+
+        if (isAndroidApp) {
+            e.preventDefault();
+            e.stopPropagation();
+            showExternalLinkModal(href);
+            return;
+        }
+
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+    }
+}, true);
+
 
