@@ -75,35 +75,60 @@ function escapeHtml(str) {
 const isAndroidApp = Boolean(window.AndroidBridge || (navigator.userAgent && navigator.userAgent.includes('TARS-Android-Shell')));
 
 function triggerFileDownload(url, filename) {
-    const sep = url.includes('?') ? '&' : '?';
-    const finalUrl = `${url}${sep}_dl=${Date.now()}`;
+    if (!url) return;
+
+    let cleanUrl = url;
+    if (cleanUrl.startsWith('file:///api/')) {
+        cleanUrl = '/' + cleanUrl.replace(/^file:\/\/\/?/, '');
+    } else if (cleanUrl.startsWith('file://')) {
+        cleanUrl = `/api/download?path=${encodeURIComponent(cleanUrl.replace(/^file:\/\//, ''))}`;
+    }
+
+    // Convertir SIEMPRE a URL absoluta con protocolo y host completo
+    let absoluteUrl;
+    try {
+        absoluteUrl = new URL(cleanUrl, window.location.href).href;
+    } catch (e) {
+        absoluteUrl = cleanUrl;
+    }
+
+    let safeName = filename;
+    if (!safeName || safeName === 'download_app' || safeName === 'download') {
+        if (cleanUrl.includes('download_app') || cleanUrl.includes('.apk')) {
+            safeName = 'TARS-Assistant.apk';
+        } else {
+            safeName = 'archivo';
+        }
+    }
+
+    const sep = absoluteUrl.includes('?') ? '&' : '?';
+    const finalUrl = `${absoluteUrl}${sep}_dl=${Date.now()}`;
 
     // Feedback visual en la tarjeta de archivo correspondiente
     const fileLabels = document.querySelectorAll('.file-card .file-name');
     fileLabels.forEach(lbl => {
-        if (filename && lbl.innerText.includes(filename)) {
+        if (safeName && lbl.innerText.includes(safeName)) {
             const original = lbl.innerText;
-            lbl.innerText = `Descargando ${filename}...`;
+            lbl.innerText = `Descargando ${safeName}...`;
             setTimeout(() => { lbl.innerText = original; }, 2500);
         }
     });
 
     if (typeof showWhatsAppToast === 'function') {
-        showWhatsAppToast('DESCARGANDO ARCHIVO', `${filename || 'Archivo'} iniciando descarga...`);
+        showWhatsAppToast('DESCARGANDO ARCHIVO', `${safeName} iniciando descarga...`);
     }
 
     // 1. Si la app nativa tiene puente nativo downloadFile (v1.0.6+)
     if (window.AndroidBridge && typeof window.AndroidBridge.downloadFile === 'function') {
-        window.AndroidBridge.downloadFile(finalUrl, filename || '');
+        window.AndroidBridge.downloadFile(finalUrl, safeName);
         return;
     }
 
     // 2. Si estamos dentro del shell nativo de Android (WebView)
     if (isAndroidApp) {
-        // En Android WebView NUNCA usar target="_blank"
         const tempLink = document.createElement('a');
         tempLink.href = finalUrl;
-        if (filename) tempLink.download = filename;
+        tempLink.download = safeName;
         document.body.appendChild(tempLink);
         tempLink.click();
         setTimeout(() => {
@@ -2613,10 +2638,13 @@ document.addEventListener('click', (e) => {
     if (!href || href === '#' || href.startsWith('javascript:')) return;
 
     // 1. Descarga de archivos locales (/api/download o /api/download_app o clases de archivo)
-    if (href.startsWith('/api/download') || a.classList.contains('inline-file-link') || a.classList.contains('file-card') || a.hasAttribute('download')) {
+    if (href.startsWith('/api/download') || href.includes('download_app') || href.startsWith('file:///api/') || a.classList.contains('inline-file-link') || a.classList.contains('file-card') || a.hasAttribute('download')) {
         e.preventDefault();
         e.stopPropagation();
-        const fname = a.getAttribute('download') || a.innerText.replace(/⬇/g, '').trim() || 'archivo';
+        let fname = a.getAttribute('download') || a.innerText.replace(/⬇/g, '').trim() || 'archivo';
+        if (fname === 'download_app' || href.includes('download_app') || href.endsWith('.apk')) {
+            fname = 'TARS-Assistant.apk';
+        }
         triggerFileDownload(href, fname);
         return;
     }
