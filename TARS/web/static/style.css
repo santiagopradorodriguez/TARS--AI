@@ -1312,6 +1312,73 @@ body {
     color: #ffffff;
 }
 
+/* ===== SELECTOR DE CEREBRO (OpenCode o Antigravity) ===== */
+.brain-selector {
+    display: flex;
+    gap: 6px;
+    padding: 10px 14px 4px 14px;
+}
+.brain-btn {
+    flex: 1;
+    padding: 8px 10px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    border-radius: 10px;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-muted);
+    cursor: pointer;
+}
+.brain-btn.active {
+    background: #8b5cf6;
+    border-color: #a78bfa;
+    color: #ffffff;
+}
+
+/* ===== CARD DE PERMISO PENDIENTE DE OPENCODE ===== */
+.permission-card {
+    max-width: 78%;
+    background: rgba(139, 92, 246, 0.12);
+    border: 1px solid #8b5cf6;
+    border-radius: 14px;
+    padding: 10px 14px;
+}
+.permission-card .perm-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #a78bfa;
+    margin-bottom: 4px;
+}
+.permission-card .perm-body {
+    font-size: 0.9rem;
+    color: var(--text-primary, #eee);
+    word-break: break-word;
+}
+.permission-card .perm-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+.permission-card .perm-btn {
+    padding: 6px 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: 8px;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+    cursor: pointer;
+}
+.permission-card .perm-btn.perm-once,
+.permission-card .perm-btn.perm-always {
+    background: #8b5cf6;
+    border-color: #a78bfa;
+    color: #ffffff;
+}
+
 /* ===== BARRA DE PREVIEW Y BOTON DE ADJUNTOS ===== */
 .icon-btn.attach-btn {
     background-color: rgba(255, 255, 255, 0.08) !important;

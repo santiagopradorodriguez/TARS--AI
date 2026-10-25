@@ -1924,7 +1924,14 @@ async function loadModelsList() {
     if (!modelsList) return;
     modelsList.innerHTML = '<div class="loading-chats">Consultando modelos disponibles...</div>';
     try {
-        const resp = await fetch('/api/models');
+        const [respCerebro, resp] = await Promise.all([
+            fetch('/api/cerebro').catch(() => null),
+            fetch('/api/models')
+        ]);
+        if (respCerebro && respCerebro.ok) {
+            const dc = await respCerebro.json().catch(() => null);
+            if (dc) updateBrainUI(dc.cerebro || currentCerebro, dc.disponible || {});
+        }
         const data = await resp.json();
         const models = data.models || [];
         if (data.current_model) {
@@ -1950,7 +1957,28 @@ async function loadModelsList() {
             `;
             card.appendChild(top);
 
-            if (m.has_effort) {
+            const variantes = Array.isArray(m.variants) ? m.variants.map(v => String(v)) : [];
+            if (variantes.length > 0) {
+                // Pastillas de variant de OpenCode (default, high, medium, low...)
+                const pills = document.createElement('div');
+                pills.className = 'effort-pills';
+                const titulosVariante = {
+                    low: 'Rápido (Low)', medium: 'Medio (Med)',
+                    high: 'Máximo (High)', default: 'Equilibrado (Default)'
+                };
+                variantes.forEach(v => {
+                    const vLower = v.toLowerCase();
+                    const pill = document.createElement('button');
+                    pill.className = `effort-pill ${(m.active && String(m.effort || '').toLowerCase() === vLower) ? 'active' : ''}`;
+                    pill.innerText = titulosVariante[vLower] || v;
+                    pill.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        switchAntigravityModel(m.name, v, m);
+                    });
+                    pills.appendChild(pill);
+                });
+                card.appendChild(pills);
+            } else if (m.has_effort) {
                 const pills = document.createElement('div');
                 pills.className = 'effort-pills';
                 ['Low', 'Medium', 'High'].forEach(eff => {
@@ -1967,7 +1995,8 @@ async function loadModelsList() {
             }
 
             card.addEventListener('click', () => {
-                switchAntigravityModel(m.name, m.effort || null);
+                if (m.disabled) return;
+                switchAntigravityModel(m.name, m.effort || null, m);
             });
             modelsList.appendChild(card);
         });
@@ -1976,14 +2005,23 @@ async function loadModelsList() {
     }
 }
 
-async function switchAntigravityModel(modelName, effort = null) {
+async function switchAntigravityModel(modelName, effort = null, extra = null) {
     closeModelsModal();
     micStatusLabel.innerText = `Cambiando a ${modelName}...`;
+    const cuerpo = { model: modelName, effort: effort };
+    // Modelos de OpenCode viajan con id, proveedor y variant exactos
+    if (extra && extra.id) {
+        cuerpo.model_id = extra.id;
+        if (extra.provider) cuerpo.provider = extra.provider;
+        if (Array.isArray(extra.variants) && extra.variants.map(v => String(v).toLowerCase()).includes(String(effort || '').toLowerCase())) {
+            cuerpo.variant = String(effort).toLowerCase();
+        }
+    }
     try {
         const resp = await fetch('/api/switch_model', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: modelName, effort: effort })
+            body: JSON.stringify(cuerpo)
         });
         const res = await resp.json();
         if (res && res.success) {
@@ -2009,6 +2047,110 @@ if (modelsModalClose) {
 }
 if (modelsModalOverlay) {
     modelsModalOverlay.addEventListener('click', closeModelsModal);
+}
+
+// ===== SELECTOR DE CEREBRO: OpenCode o Antigravity =====
+let currentCerebro = 'opencode';
+
+function updateBrainUI(cerebro, disponible = {}) {
+    currentCerebro = (cerebro === 'antigravity') ? 'antigravity' : 'opencode';
+    const open = document.getElementById('brain-open-btn');
+    const agy = document.getElementById('brain-agy-btn');
+    if (!open || !agy) return;
+    open.classList.toggle('active', currentCerebro === 'opencode');
+    agy.classList.toggle('active', currentCerebro === 'antigravity');
+    if (disponible && typeof disponible.opencode === 'boolean') {
+        open.title = disponible.opencode ? 'OpenCode corriendo en esta PC' : 'OpenCode no esta corriendo en esta PC';
+    }
+    agy.title = 'Cerebro Antigravity en la PC';
+}
+
+async function elegirCerebro(cerebro) {
+    micStatusLabel.innerText = `Cambiando cerebro a ${cerebro === 'opencode' ? 'OpenCode' : 'Antigravity'}...`;
+    try {
+        const resp = await fetch('/api/cerebro', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ cerebro: cerebro })
+        });
+        const res = await resp.json();
+        if (res && res.success) {
+            updateBrainUI(res.cerebro, {});
+            showWhatsAppToast('Cerebro actualizado', `Ahora TARS usa ${res.cerebro === 'opencode' ? 'OpenCode' : 'Antigravity'}`);
+            micStatusLabel.innerText = 'Toca para hablar';
+            if (modelsList && modelsModal && !modelsModal.classList.contains('hidden')) {
+                loadModelsList();
+            }
+        } else {
+            alert(res.error || 'No se pudo cambiar el cerebro');
+            micStatusLabel.innerText = 'Toca para hablar';
+        }
+    } catch (e) {
+        alert('Error comunicando con TARS para cambiar el cerebro');
+        micStatusLabel.innerText = 'Toca para hablar';
+    }
+}
+
+const brainOpenBtn = document.getElementById('brain-open-btn');
+const brainAgyBtn = document.getElementById('brain-agy-btn');
+if (brainOpenBtn) brainOpenBtn.addEventListener('click', () => elegirCerebro('opencode'));
+if (brainAgyBtn) brainAgyBtn.addEventListener('click', () => elegirCerebro('antigravity'));
+
+// ===== CARD DE PERMISO PENDIENTE DE OPENCODE =====
+function updatePermissionCard(pending, chatId) {
+    let card = document.getElementById('permission-card');
+    if (!pending) {
+        if (card) card.remove();
+        return;
+    }
+    const rid = String(pending.id || pending.request_id || '');
+    if (!rid || !chatContainer) {
+        if (card) card.remove();
+        return;
+    }
+    const key = `${chatId}:${rid}`;
+    if (card && card.dataset.key === key) return;
+    if (!card) {
+        card = document.createElement('div');
+        card.id = 'permission-card';
+        card.className = 'message assistant permission-card';
+        chatContainer.appendChild(card);
+    }
+    card.dataset.key = key;
+    const recursos = Array.isArray(pending.resources) ? pending.resources.map(String) : [];
+    const detalle = recursos.slice(0, 3).join(', ');
+    card.innerHTML = `
+        <div class="perm-title">Permiso pendiente</div>
+        <div class="perm-body">TARS pide permiso para ${escapeHtml(pending.action || 'continuar')}${detalle ? `: ${escapeHtml(detalle)}` : ''}</div>
+        <div class="perm-actions">
+            <button class="perm-btn perm-once">Aprobar una vez</button>
+            <button class="perm-btn perm-always">Aprobar siempre</button>
+            <button class="perm-btn perm-reject">Rechazar</button>
+        </div>
+    `;
+    card.querySelector('.perm-once').addEventListener('click', () => responderPermiso(chatId, rid, 'once'));
+    card.querySelector('.perm-always').addEventListener('click', () => responderPermiso(chatId, rid, 'always'));
+    card.querySelector('.perm-reject').addEventListener('click', () => responderPermiso(chatId, rid, 'reject'));
+}
+
+async function responderPermiso(chatId, requestId, decision) {
+    const card = document.getElementById('permission-card');
+    try {
+        const resp = await fetch('/api/opencode/permission/reply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, request_id: requestId, decision: decision })
+        });
+        const res = await resp.json();
+        if (res && res.success) {
+            showWhatsAppToast('Permiso respondido', decision === 'reject' ? 'Permiso rechazado' : 'Permiso aprobado');
+            if (card) card.remove();
+        } else {
+            alert(res.error || 'No se pudo responder el permiso');
+        }
+    } catch (e) {
+        alert('Error respondiendo el permiso');
+    }
 }
 
 // ===== SELECTOR MULTI-PC (TAILSCALE / LAN) =====
@@ -2623,6 +2765,9 @@ async function syncWithAntigravity() {
                 micStatusLabel.innerText = 'Toca para hablar';
             }
         }
+
+        // Card de permiso pendiente de OpenCode
+        updatePermissionCard(data.permission_pending || null, data.chat_id || activeChatId);
 
         if (data.chat_changed) {
             if (chatContainer) {

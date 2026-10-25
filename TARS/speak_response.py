@@ -8,8 +8,34 @@ import asyncio
 import certifi
 import edge_tts
 
-sys.path.append("/home/santiago/.gemini/config")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+sys.path.append(os.environ.get("TARS_CONFIG_DIR") or os.path.expanduser("~/.gemini/config"))
 os.environ["SSL_CERT_FILE"] = certifi.where()
+
+try:
+    from tars_rutas import python_tts, recurso_tars, ruta_estado
+except ImportError as exc:
+    # Respaldo minimo si el instalador no llevo tars_rutas.py
+    print(f"[TARS] No pude importar tars_rutas ({exc}); uso rutas basicas.", file=sys.stderr)
+
+    def ruta_estado():
+        carpeta = os.environ.get("TARS_CONFIG_DIR") or os.path.expanduser("~/.gemini/config")
+        return os.path.join(carpeta, "tars_state.json")
+
+    def recurso_tars(nombre, extra=()):
+        for ruta in (os.path.join(BASE_DIR, nombre),
+                     os.path.join(os.environ.get("TARS_CONFIG_DIR") or os.path.expanduser("~/.gemini/config"), nombre)):
+            if os.path.exists(ruta):
+                return ruta
+        return os.path.join(BASE_DIR, nombre)
+
+    def python_tts():
+        venv = os.path.expanduser("~/.gemini/tts_venv/bin/python")
+        return venv if os.path.isfile(venv) else (sys.executable or "python3")
+
+STATE_FILE = ruta_estado()
 
 VOICE = "es-AR-TomasNeural"
 OUTPUT_FILE = "/tmp/antigravity_response.mp3"
@@ -154,7 +180,7 @@ def main():
             return
 
         # Si TARS está apagado (Modo Rojo), no hablar
-        state_file = "/home/santiago/.gemini/config/tars_state.json"
+        state_file = STATE_FILE
         try:
             if os.path.exists(state_file):
                 with open(state_file, "r") as sf:
@@ -170,7 +196,11 @@ def main():
         if not transcript_path or not os.path.exists(transcript_path):
             convo_id = payload.get("conversationId") or payload.get("conversation_id")
             if convo_id:
-                candidate = f"/home/santiago/.gemini/antigravity/brain/{convo_id}/.system_generated/logs/transcript.jsonl"
+                candidate = os.path.expanduser(
+                    "~/.gemini/antigravity/brain/"
+                    + convo_id
+                    + "/.system_generated/logs/transcript.jsonl"
+                )
                 if os.path.exists(candidate):
                     transcript_path = candidate
         if not transcript_path or not os.path.exists(transcript_path):
@@ -237,8 +267,8 @@ def main():
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                                
                 # Launch tars_player to mute mic, play chime, speak, and unmute mic
-                subprocess.Popen(["/home/santiago/.gemini/tts_venv/bin/python", 
-                                  "/home/santiago/.gemini/config/tars_player.py", wav_file], 
+                subprocess.Popen([python_tts(),
+                                  recurso_tars("tars_player.py"), wav_file], 
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, 
                                  start_new_session=True)
     except Exception:
