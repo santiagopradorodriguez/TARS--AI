@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0f1117">
     <title>TARS Movil</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/style.css?v=7.0">
+    <link rel="stylesheet" href="/static/style.css?v=8.0">
 </head>
 <body>
     <div class="app-container">
@@ -225,6 +225,10 @@
                 </div>
                 <button id="models-modal-close" class="modal-close-btn" title="Cerrar">&times;</button>
             </div>
+            <div class="brain-selector" id="brain-selector">
+                <button id="brain-open-btn" class="brain-btn" data-cerebro="opencode" title="Cerebro OpenCode">OpenCode</button>
+                <button id="brain-agy-btn" class="brain-btn" data-cerebro="antigravity" title="Cerebro Antigravity">Antigravity</button>
+            </div>
             <div class="chats-list-container" id="models-list">
                 <div class="loading-chats">Consultando modelos disponibles...</div>
             </div>
@@ -352,6 +356,6 @@
             </div>
         </div>
     </div>
-    <script src="/static/app.js?v=7.0"></script>
+    <script src="/static/app.js?v=8.0"></script>
 </body>
 </html>

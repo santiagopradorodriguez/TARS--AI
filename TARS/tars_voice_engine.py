@@ -25,7 +25,39 @@ except Exception:
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
-STATE_FILE = "/home/santiago/.gemini/config/tars_state.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+try:
+    from tars_rutas import cargar_estado, guardar_llave_estado, ruta_estado
+except ImportError as exc:
+    # Respaldo minimo si el instalador no llevo tars_rutas.py
+    print(f"[TARS] No pude importar tars_rutas ({exc}); uso rutas basicas.", file=sys.stderr)
+
+    def ruta_estado():
+        carpeta = os.environ.get("TARS_CONFIG_DIR") or os.path.expanduser("~/.gemini/config")
+        return os.path.join(carpeta, "tars_state.json")
+
+    def cargar_estado():
+        try:
+            with open(ruta_estado(), "r", encoding="utf-8") as archivo:
+                datos = json.load(archivo)
+            return datos if isinstance(datos, dict) else {}
+        except Exception:
+            return {}
+
+    def guardar_llave_estado(clave, valor):
+        try:
+            datos = cargar_estado()
+            datos[clave] = valor
+            with open(ruta_estado(), "w", encoding="utf-8") as archivo:
+                json.dump(datos, archivo)
+            return True
+        except Exception:
+            return False
+
+STATE_FILE = ruta_estado()
 DEFAULT_EDGE_VOICE = "es-AR-TomasNeural"
 HOST = "generativelanguage.googleapis.com"
 MODEL = "models/gemini-2.5-flash-native-audio-latest"
@@ -41,27 +73,16 @@ def load_env(path):
 
 def get_voice():
     try:
-        if os.path.exists(STATE_FILE):
-            with open(STATE_FILE, "r") as f:
-                data = json.load(f)
-                return data.get("voice", "edge")
+        return cargar_estado().get("voice", "edge")
     except Exception:
         pass
     return "edge"
 
 def set_voice(voice_name):
-    try:
-        data = {}
-        if os.path.exists(STATE_FILE):
-            with open(STATE_FILE, "r") as f:
-                data = json.load(f)
-        data["voice"] = voice_name
-        with open(STATE_FILE, "w") as f:
-            json.dump(data, f)
+    if guardar_llave_estado("voice", voice_name):
         return True
-    except Exception as e:
-        print(f"Error guardando voz: {e}", file=sys.stderr)
-        return False
+    print(f"Error guardando voz en {STATE_FILE}", file=sys.stderr)
+    return False
 
 def clean_edge_text(t):
     import re

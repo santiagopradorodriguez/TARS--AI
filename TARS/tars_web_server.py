@@ -1185,8 +1185,10 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
     media = []
     sent_to_ide = False
 
-    # Si hay archivos adjuntos, enviarlos prioritariamente a Antigravity IDE
-    if file_paths and len(file_paths) > 0:
+    # Si hay archivos adjuntos y el cerebro no es OpenCode, enviarlos
+    # prioritariamente a Antigravity IDE. Con OpenCode, los archivos van como
+    # attachment del prompt (ver nivel del puente abajo).
+    if file_paths and len(file_paths) > 0 and get_cerebro() != "opencode":
         if send_to_antigravity_ide(command_text, target_chat_id=target_chat_id, file_paths=file_paths):
             sent_to_ide = True
             return "Archivos inyectados en Antigravity IDE.", media, sent_to_ide
@@ -1290,7 +1292,7 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
             media.append({"type": "file", "url": f"/media/{filename}", "name": filename})
         except Exception as e:
             reply = f"Error creando archivo: {e}"
-        return reply, media
+        return reply, media, sent_to_ide
 
     # 4. Abrir aplicaciones o paginas explicitas
     if cmd_clean in ["abrir firefox", "abre firefox", "abrir navegador", "abre el navegador"]:
@@ -1311,12 +1313,51 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
         subprocess.Popen(["bash", "-c", f"sleep 4 && bash '{script_path}' 08:00"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return "Perfecto. En 4 segundos la PC entrará en suspensión y volverá a encenderse sola a las 8 de la mañana con Antigravity listo. ¡Buenas noches!", media, sent_to_ide
 
-    # 6. Para todo lo demas: Inyectar directamente a esta ventana activa de Antigravity IDE
+    # 6. Cerebro OpenCode: nivel de degradacion entre los shortcuts y Antigravity.
+    # El prompt viaja por el puente y el turno se sigue por eventos: la respuesta
+    # la entrega /api/sync cuando el turno entra en idle, igual que con Antigravity.
+    if get_cerebro() == "opencode":
+        aviso_opencode = ""
+        try:
+            puente = get_puente_opencode()
+            if puente is None:
+                raise RuntimeError("El servicio de OpenCode no esta corriendo en esta PC.")
+            chat_turno = str(target_chat_id or "").strip() or "tars_celular"
+            archivos_adjuntos = None
+            if file_paths:
+                import mimetypes
+                archivos_adjuntos = []
+                for fpath in file_paths:
+                    mime, _ = mimetypes.guess_type(fpath)
+                    # Forma Tool.FileContent de la API: type + uri + mime
+                    archivos_adjuntos.append({
+                        "type": "file",
+                        "uri": "file://" + fpath,
+                        "mime": mime or "application/octet-stream",
+                        "name": os.path.basename(fpath)
+                    })
+            resp_env = puente.enviar_prompt_chat(
+                chat_turno, command_text,
+                titulo="TARS celular" if chat_turno == "tars_celular" else None,
+                agente=AGENTE_TARS,
+                archivos=archivos_adjuntos
+            )
+            print(f"[TARS Web] Turno abierto por puente OpenCode (chat {chat_turno}, sesion {str(resp_env.get('session_id') or '')[-8:]}, entrega {resp_env.get('entrega', '')})")
+            sent_to_ide = True
+            return "Turno abierto en OpenCode.", media, sent_to_ide
+        except Exception as e:
+            aviso_opencode = f"OpenCode no respondio ({str(e)[:150]})."
+            print(f"[TARS Web] Fallo el nivel OpenCode: {e}; degradando a Antigravity con aviso visible.")
+
+    # 7. Para todo lo demas: Inyectar directamente a esta ventana activa de Antigravity IDE
     if send_to_antigravity_ide(command_text, target_chat_id=target_chat_id, file_paths=file_paths):
         sent_to_ide = True
-        return "Mensaje enviado a Antigravity en la computadora.", media, sent_to_ide
+        texto_ide = "Mensaje enviado a Antigravity en la computadora."
+        if aviso_opencode:
+            texto_ide = f"{aviso_opencode} {texto_ide}"
+        return texto_ide, media, sent_to_ide
 
-    # Fallback si Antigravity IDE no esta abierto en el escritorio
+    # Fallback final si Antigravity IDE no esta abierto en el escritorio: agy
     ai_reply = query_antigravity(command_text)
     import re
     img_matches = re.findall(r'(/[\w\-./]+\.(?:png|jpg|jpeg|gif))', ai_reply)
@@ -1327,6 +1368,9 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
             if not os.path.exists(dest):
                 subprocess.run(["cp", img_path, dest])
             media.append({"type": "image", "url": f"/media/{img_name}", "name": img_name})
+
+    if aviso_opencode:
+        ai_reply = f"{aviso_opencode} {ai_reply}" if ai_reply else aviso_opencode
 
     return ai_reply, media, sent_to_ide
 
@@ -2004,6 +2048,13 @@ async def handle_sync(request):
         # Si falló la PC remota, remote_api_request ya la marcó inalcanzable.
         # Caemos de inmediato a la sincronización de la PC local sin colgar al cliente.
 
+    # Cerebro OpenCode: /api/sync lee el estado del puente por chat (M3).
+    # Ojo: aca se usa el id crudo del cliente, no pasamos por clean_convo_id,
+    # porque los ids de chats de OpenCode no existen en el brain de Antigravity
+    # y esa funcion los volveria vacios desalineando el registro entregado.
+    if get_cerebro() == "opencode":
+        return await sincronizar_desde_puente(last_idx, raw_client_chat.split("?")[0].strip())
+
     active_id = await asyncio.to_thread(get_current_antigravity_convo_id, client_chat_id) or ""
     current_model = await asyncio.to_thread(get_current_antigravity_model) or ""
 
@@ -2081,6 +2132,29 @@ async def handle_tts(request):
     step_str = request.query.get("step", "")
     chat_id = clean_convo_id(request.query.get("chat_id", ""))
     text = request.query.get("text", "")
+
+    # Turnos de chats con OpenCode: el texto vive en el registro del puente,
+    # no en el transcript de Antigravity (M3). El registro se guarda con el id
+    # crudo que manda el cliente, igual que en /api/sync.
+    if not text and step_str:
+        try:
+            registro_ids = []
+            crudo = request.query.get("chat_id", "").strip()
+            if crudo:
+                registro_ids.append(crudo)
+                try:
+                    registro_ids.append(urllib.parse.unquote(crudo))
+                except Exception:
+                    pass
+            if chat_id:
+                registro_ids.append(chat_id)
+            for rid in registro_ids:
+                texto_puente = leer_texto_tts_puente(rid, int(step_str))
+                if texto_puente:
+                    text = texto_puente
+                    break
+        except Exception:
+            pass
 
     if not text and step_str:
         try:
@@ -2228,6 +2302,13 @@ async def handle_chat_history(request):
             except Exception:
                 pass
 
+    # Historial de chats con sesion de OpenCode: sale del puente, no del
+    # transcript de Antigravity (M3). Lectura pura: si el chat no esta mapeado
+    # no se crea sesion nueva, cae al camino de Antigravity.
+    if chat_id and chat_id in chats_opencode_mapeados():
+        data = await asyncio.to_thread(historial_desde_puente, chat_id, limit)
+        return web.json_response(data)
+
     if not chat_id:
         active_id = await asyncio.to_thread(get_current_antigravity_convo_id) or ""
         chat_id = active_id
@@ -2257,6 +2338,539 @@ def _write_tars_state(updates):
     except Exception as e:
         print(f"[TARS Web] Error guardando estado TARS: {e}")
         return False
+
+
+# ---------------------------------------------------------------------------
+# OpenCode como cerebro de TARS (M3)
+# ---------------------------------------------------------------------------
+# TARS es un cliente mas de OpenCode: los turnos del celular con cerebro
+# opencode viajan por el puente (integraciones/opencode_bridge.py) y sus
+# respuestas se siguen por el hilo de eventos del puente, nunca en un hilo
+# pegado al request HTTP. El ciclot de /api/sync y el watcher de push leen el
+# estado en memoria del puente y entregan la respuesta al quedar en idle.
+
+PUENTE_OPENCODE = None
+PUENTE_OPENCODE_LOCK = threading.Lock()
+PUENTE_ULTIMO_INTENTO = 0.0
+
+AGENTE_TARS = "tars"
+
+# Registros en memoria del proceso, uno por chat del celular
+OPENCODE_ENTREGADOS = {}    # chat_id -> assistant_message_id ya entregado
+OPENCODE_ULTIMO_IDX = {}    # chat_id -> ultimo step_index entregado
+TTS_TEXTOS_PUENTE = {}      # chat_id -> {step_index: texto del turno}
+PUSH_ENTREGADOS_PUENTE = {} # chat_id -> assistant_message_id ya notificado por push
+
+def get_cerebro():
+    """Cerebro activo para los chats del celular: opencode o antigravity."""
+    try:
+        val = str((_read_tars_state() or {}).get("cerebro") or "").strip().lower()
+    except Exception:
+        val = ""
+    return val if val in ("opencode", "antigravity") else "opencode"
+
+def set_cerebro(valor):
+    """Guarda la eleccion de cerebro en tars_state.json."""
+    if valor not in ("opencode", "antigravity"):
+        return False
+    return _write_tars_state({"cerebro": valor})
+
+def get_puente_opencode():
+    """Singleton del puente con OpenCode, con import perezoso y reintento corto."""
+    global PUENTE_OPENCODE, PUENTE_ULTIMO_INTENTO
+    if PUENTE_OPENCODE is not None:
+        return PUENTE_OPENCODE
+    if time.time() - PUENTE_ULTIMO_INTENTO < 5.0:
+        return None
+    with PUENTE_OPENCODE_LOCK:
+        if PUENTE_OPENCODE is not None:
+            return PUENTE_OPENCODE
+        if time.time() - PUENTE_ULTIMO_INTENTO < 5.0:
+            return None
+        PUENTE_ULTIMO_INTENTO = time.time()
+        try:
+            from integraciones.opencode_bridge import PuenteOpenCode
+            puente = PuenteOpenCode(agente_por_defecto=AGENTE_TARS)
+            PUENTE_OPENCODE = puente
+            print(f"[TARS Web] Puente OpenCode listo (sesiones activas: {len(puente.sesiones_activas())})")
+            return PUENTE_OPENCODE
+        except Exception as e:
+            print(f"[TARS Web] Puente OpenCode no disponible ahora ({e}); reintento en breve.")
+            return None
+
+def chats_opencode_mapeados():
+    """Lee el mapa persistido chat_id de TARS -> sesion de OpenCode. Solo lectura."""
+    try:
+        from integraciones.opencode_bridge import ruta_mapa_sesiones
+        with open(ruta_mapa_sesiones(), "r") as f:
+            datos = json.load(f)
+        chats = datos.get("chats") or {}
+        return chats if isinstance(chats, dict) else {}
+    except Exception:
+        return {}
+
+def elegir_chat_opencode(client_chat_id):
+    """
+    Resuelve sobre que chat de TARS hay que mirar el estado de OpenCode.
+
+    Con chat del cliente mapeado, ese; con chat nuevo sin sesion todavia,
+    vacio (la lectura nunca crea nada); sin chat, el mas recientemente
+    actualizado del mapa.
+    """
+    mapa = chats_opencode_mapeados()
+    if client_chat_id:
+        return client_chat_id if client_chat_id in mapa else ""
+    mejor = ""
+    mejor_orden = 0
+    for cid, entrada in mapa.items():
+        orden = int(entrada.get("actualizado") or 0)
+        if orden >= mejor_orden:
+            mejor, mejor_orden = cid, orden
+    return mejor
+
+def _proc_info_vacia():
+    return {
+        "is_processing": False,
+        "thought": "",
+        "tool_name": "",
+        "tool_action": "",
+        "tool_detail": "",
+        "step_index": 0,
+        "steps_count": 0,
+        "recent_steps": [],
+        "generated_files": []
+    }
+
+def _proc_info_opencode(estado):
+    """Estado del puente convertido a la forma processing_info que espera la app."""
+    info = _proc_info_vacia()
+    info["is_processing"] = bool(estado.get("is_processing"))
+    info["tool_name"] = str(estado.get("tool_name") or "")
+    accion = str(estado.get("tool_action") or "")
+    if info["is_processing"] and not accion:
+        accion = "[Pensando] Analizando y planificando respuesta..."
+    info["tool_action"] = accion
+    detalle = str(estado.get("tool_detail") or "")
+    if len(detalle) > 130:
+        detalle = detalle[:130] + "..."
+    info["tool_detail"] = detalle
+    info["thought"] = str(estado.get("thought") or ("Analizando los próximos pasos..." if info["is_processing"] else ""))
+    info["recent_steps"] = list(estado.get("recent_steps") or [])[-5:]
+    info["generated_files"] = list(estado.get("generated_files") or [])[:8]
+    return info
+
+def leer_turno_puente(client_chat_id):
+    """
+    Estado del chat para /api/sync cuando el cerebro activo es OpenCode.
+
+    Devuelve {"estado": estado_del_puente, "processing_info": proc_info} o
+    None si el chat no tiene sesion asociada. Lectura pura: no crea sesiones.
+    """
+    chat_objetivo = elegir_chat_opencode(str(client_chat_id or ""))
+    if not chat_objetivo:
+        return None
+    puente = get_puente_opencode()
+    if puente is None:
+        return None
+    estado = puente.estado_chat(chat_objetivo)
+    if estado is None:
+        return None
+    return {"estado": estado, "processing_info": _proc_info_opencode(estado), "chat_resuelto": chat_objetivo}
+
+def leer_texto_tts_puente(chat_id, step_idx):
+    """Texto guardado del turno entregado, para /api/tts sin transcript de IDE."""
+    registros = TTS_TEXTOS_PUENTE.get(chat_id)
+    if not registros or not step_idx:
+        return ""
+    texto = registros.get(step_idx)
+    if not texto and isinstance(step_idx, str):
+        try:
+            texto = registros.get(int(step_idx))
+        except Exception:
+            texto = None
+    return texto or ""
+
+def historial_desde_puente(chat_id, limite=10):
+    """Historial de un chat mapeado en el formato que espera la app."""
+    puente = get_puente_opencode()
+    if puente is None:
+        return {"chat_id": chat_id, "messages": [], "last_step_index": 0}
+    try:
+        entradas = puente.historial_chat(chat_id, limite=limite)
+    except Exception as e:
+        print(f"[TARS Web] Error pidiendo historial OpenCode ({chat_id}): {e}")
+        entradas = []
+    mensajes = []
+    idx = 0
+    for entrada in entradas:
+        texto = str(entrada.get("texto") or "").strip()
+        if not texto:
+            continue
+        idx += 1
+        es_tars = str(entrada.get("rol") or "") == "tars"
+        media = collect_turn_media_and_files(texto, {}) if es_tars else []
+        mensajes.append({
+            "role": "assistant" if es_tars else "user",
+            "content": texto,
+            "media": media,
+            "step_index": idx,
+        })
+    return {"chat_id": chat_id, "messages": mensajes, "last_step_index": idx}
+
+def cancelar_puente_todos():
+    """Interrumpe los turnos corriendo de los chats mapeados con OpenCode."""
+    puente = get_puente_opencode()
+    if puente is None:
+        return {"success": False, "error": "El servicio de OpenCode no esta accesible.", "cancelled": []}
+    cancelados = []
+    detalle = []
+    for chat_id in list(chats_opencode_mapeados().keys()):
+        try:
+            estado = puente.estado_chat(chat_id)
+            if estado and estado.get("is_processing"):
+                res = puente.cancelar_chat(chat_id)
+                if res.get("ok"):
+                    cancelados.append(chat_id)
+                    detalle.append({"chat_id": chat_id, "interrupted": bool(res.get("interrupted"))})
+                else:
+                    detalle.append({"chat_id": chat_id, "error": "No se interrumpio."})
+        except Exception as e:
+            detalle.append({"chat_id": chat_id, "error": str(e)[:120]})
+    return {"success": True, "cancelled": cancelados, "detalle": detalle, "cerebro": "opencode"}
+
+# ---------------------------------------------------------------------------
+# M4: cerebro y modelos seleccionables
+# ---------------------------------------------------------------------------
+
+def modelos_desde_puente():
+    """Lista de modelos de OpenCode en la forma que espera el modal de la app."""
+    resultado = {"cerebro": "opencode", "current_model": "", "models": []}
+    puente = get_puente_opencode()
+    if puente is None:
+        resultado["error"] = "El servicio de OpenCode no esta accesible."
+        return resultado
+    activo_id = ""
+    proveedor_activo = ""
+    variante_activa = ""
+    chat_reciente = elegir_chat_opencode(None)
+    if chat_reciente:
+        try:
+            estado = puente.estado_chat(chat_reciente)
+            modelo = (estado or {}).get("model")
+            if isinstance(modelo, dict):
+                activo_id = str(modelo.get("id") or "")
+                proveedor_activo = str(modelo.get("providerID") or "")
+                variante_activa = str(modelo.get("variant") or "")
+        except Exception:
+            activo_id = ""
+    try:
+        crudos = puente.listar_modelos()
+    except Exception as e:
+        print(f"[TARS Web] Error listando modelos OpenCode: {e}")
+        crudos = []
+    modelos = []
+    for crudo in crudos:
+        mid = str(crudo.get("id") or "")
+        if not mid:
+            continue
+        variantes = [str(v) for v in (crudo.get("variantes") or [])]
+        es_activo = mid == activo_id and (not proveedor_activo or str(crudo.get("proveedor") or "") == proveedor_activo)
+        modelos.append({
+            "id": mid,
+            "provider": str(crudo.get("proveedor") or ""),
+            "name": str(crudo.get("nombre") or mid),
+            "model_name": mid,
+            "effort": variante_activa if es_activo else "",
+            "has_effort": bool(variantes),
+            "badge": "" if crudo.get("habilitado", True) else "No habilitado",
+            "disabled": not crudo.get("habilitado", True),
+            "active": es_activo,
+            "variants": variantes
+        })
+    if activo_id:
+        for m in modelos:
+            if m["id"] == activo_id:
+                m["active"] = True
+    resultado["current_model"] = activo_id
+    resultado["models"] = modelos
+    if not modelos:
+        resultado.setdefault("error", "No hay modelos habilitados de OpenCode.")
+    return resultado
+
+def aplicar_modelo_puente(modelo_id, variante=None, proveedor=None, chat_id=None):
+    """Aplica un modelo de OpenCode al chat activo. Cambio explicito, no automatico (M4)."""
+    if not modelo_id:
+        return {"success": False, "error": "Falta el id del modelo."}
+    puente = get_puente_opencode()
+    if puente is None:
+        return {"success": False, "error": "El servicio de OpenCode no esta accesible."}
+    chat_objetivo = chat_id or elegir_chat_opencode(None) or "tars_celular"
+    try:
+        res = puente.aplicar_modelo_chat(chat_objetivo, modelo_id, proveedor=proveedor, variante=variante)
+    except Exception as e:
+        return {"success": False, "error": str(e)[:200], "cerebro": "opencode"}
+    if not res.get("ok"):
+        return {"success": False, "error": str(res.get("mensaje") or "No se pudo aplicar el modelo."), "cerebro": "opencode"}
+    activo = res.get("modelo_activo") or {}
+    return {
+        "success": True,
+        "cerebro": "opencode",
+        "chat_id": chat_objetivo,
+        "current_model": str(activo.get("id") or modelo_id),
+        "model_id": str(activo.get("id") or modelo_id),
+        "provider": str(activo.get("providerID") or proveedor or "")
+    }
+
+async def handle_get_cerebro(request):
+    disponible = {"opencode": get_puente_opencode() is not None, "antigravity": True}
+    return web.json_response({
+        "success": True,
+        "cerebro": get_cerebro(),
+        "disponible": disponible
+    })
+
+async def handle_set_cerebro(request):
+    global LAST_KNOWN_IDE_CHAT
+    try:
+        body = await request.json()
+        destino = str(body.get("cerebro") or "").strip().lower()
+        if destino not in ("opencode", "antigravity"):
+            return web.json_response({"success": False, "error": "Cerebro invalido: use opencode o antigravity."}, status=400)
+        if destino == "opencode" and get_puente_opencode() is None:
+            # El cambio de cerebro es explicito: si el servicio no esta, se avisa
+            # y no se cambia solo
+            return web.json_response({
+                "success": False,
+                "error": "El servicio de OpenCode no esta corriendo en esta PC. Arrancalo y proba de nuevo.",
+                "cerebro": get_cerebro()
+            }, status=503)
+        anterior = get_cerebro()
+        if destino == anterior:
+            return web.json_response({"success": True, "cerebro": destino, "cambio": False})
+        set_cerebro(destino)
+        if destino == "antigravity":
+            LAST_KNOWN_IDE_CHAT = ""
+        print(f"[TARS Web] Cerebro cambiado explicitamente: {anterior} -> {destino}")
+        return web.json_response({"success": True, "cerebro": destino, "cambio": True})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+# ---------------------------------------------------------------------------
+# M5: permisos de OpenCode desde el celular
+# ---------------------------------------------------------------------------
+
+PUSH_PERMISOS_ENVIADOS = {}  # chat_id -> request_id ya avisado por push
+
+def _permiso_a_card(chat_id, entradas, estado=None):
+    """Normaliza entradas de permisos a la forma de la card de la app."""
+    fichas = []
+    for per in entradas:
+        if not isinstance(per, dict):
+            continue
+        rid = str(per.get("id") or per.get("requestID") or per.get("request_id") or "")
+        if not rid:
+            continue
+        accion = str(per.get("action") or per.get("type") or "")
+        recursos = per.get("resources") or per.get("patterns") or []
+        fichas.append({
+            "chat_id": chat_id,
+            "request_id": rid,
+            "action": accion,
+            "resources": list(recursos) if isinstance(recursos, list) else [str(recursos)],
+            "metadata": per.get("metadata") or {},
+            "session_id": str((estado or {}).get("session_id") or "")
+        })
+    return fichas
+
+def permisos_pendientes_puente():
+    """
+    Permisos pendientes de los chats mapeados con OpenCode.
+
+    Primero el estado en memoria del puente (via SSE); si el chat esta
+    procesando y no tiene pendiente marcado, reconcilia contra la API.
+    """
+    puente = get_puente_opencode()
+    if puente is None:
+        return []
+    salida = []
+    for chat_id in chats_opencode_mapeados().keys():
+        try:
+            estado = puente.estado_chat(chat_id)
+        except Exception:
+            estado = None
+        estado = estado or {}
+        pendiente = estado.get("permission_pending")
+        if isinstance(pendiente, dict) and pendiente:
+            fichas = _permiso_a_card(chat_id, [{
+                "id": pendiente.get("id"),
+                "action": pendiente.get("action"),
+                "resources": pendiente.get("resources") or [],
+                "metadata": pendiente.get("metadata") or {}
+            }], estado)
+            salida.extend(fichas)
+            continue
+        if not estado.get("is_processing"):
+            continue
+        session_id = str(estado.get("session_id") or "")
+        if not session_id:
+            continue
+        try:
+            crudos = puente.permisos_pendientes(session_id)
+        except Exception as e:
+            print(f"[TARS Web] Error leyendo permisos pendientes ({chat_id}): {e}")
+            continue
+        salida.extend(_permiso_a_card(chat_id, crudos, estado))
+    return salida
+
+def permisos_para_push():
+    """Permisos nuevos para empujar al celular una sola vez por request."""
+    outs = []
+    for ficha in permisos_pendientes_puente():
+        rid = ficha.get("request_id") or ""
+        if rid and PUSH_PERMISOS_ENVIADOS.get(ficha["chat_id"]) == rid:
+            continue
+        outs.append(ficha)
+    return outs
+
+async def handle_opencode_permissions(request):
+    fichas = await asyncio.to_thread(permisos_pendientes_puente)
+    return web.json_response({"success": True, "pendientes": fichas, "cerebro": get_cerebro()})
+
+async def handle_opencode_permission_reply(request):
+    try:
+        body = await request.json()
+        request_id = str(body.get("request_id") or "").strip()
+        decision = str(body.get("decision") or "once").strip().lower()
+        if decision == "rejected":
+            decision = "reject"
+        if decision not in ("once", "always", "reject"):
+            return web.json_response({"success": False, "error": "Decision invalida: use once, always o reject."}, status=400)
+        chat_id = str(body.get("chat_id") or "").strip() or elegir_chat_opencode(None)
+        if not chat_id:
+            return web.json_response({"success": False, "error": "No hay un chat de OpenCode activo para responder el permiso."}, status=404)
+        puente = get_puente_opencode()
+        if puente is None:
+            return web.json_response({"success": False, "error": "El servicio de OpenCode no esta accesible."}, status=503)
+        session_id = puente.sesion_de_chat(chat_id) or ""
+        if not session_id:
+            return web.json_response({"success": False, "error": "Ese chat no tiene sesion de OpenCode."}, status=404)
+        ok = await asyncio.to_thread(puente.responder_permiso, session_id, request_id, decision)
+        if ok:
+            PUSH_PERMISOS_ENVIADOS[chat_id] = request_id
+        return web.json_response({"success": bool(ok), "chat_id": chat_id, "request_id": request_id, "decision": decision})
+    except Exception as e:
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+def turnos_listos_para_push():
+    """Chats mapeados que quedaron en idle con respuesta sin notificar por push."""
+    puente = get_puente_opencode()
+    if puente is None:
+        return []
+    listos = []
+    for chat_id in chats_opencode_mapeados().keys():
+        try:
+            estado = puente.estado_chat(chat_id)
+        except Exception:
+            estado = None
+        if not estado or estado.get("is_processing"):
+            continue
+        msg_id = str(estado.get("assistant_message_id") or "")
+        contenido = str(estado.get("last_message") or "")
+        if not msg_id or not contenido.strip():
+            continue
+        if PUSH_ENTREGADOS_PUENTE.get(chat_id) == msg_id:
+            continue
+        listos.append({"chat_id": chat_id, "msg_id": msg_id, "contenido": contenido})
+    return listos
+
+async def sincronizar_desde_puente(last_idx, client_chat_id):
+    """Rama de /api/sync con cerebro OpenCode, espejo del camino de Antigravity."""
+    turno = await asyncio.to_thread(leer_turno_puente, client_chat_id)
+    proc_info = (turno or {}).get("processing_info") if turno else _proc_info_vacia()
+    estado = (turno or {}).get("estado") or {}
+    modelo = estado.get("model")
+    model_str = str(modelo.get("id") or "") if isinstance(modelo, dict) else ""
+
+    data = {
+        "has_new": False,
+        "step_index": OPENCODE_ULTIMO_IDX.get(client_chat_id, 0),
+        "chat_id": client_chat_id or "",
+        "current_model": model_str,
+        "chat_changed": False,
+        "processing_info": proc_info,
+        "processing_status": proc_info.get("tool_action", "") if proc_info.get("is_processing") else "",
+        "permission_pending": estado.get("permission_pending") or None,
+        "pc_audio_muted": get_pc_sound_muted(),
+        "mobile_voice_muted": get_mobile_voice_muted(),
+        "tars_mode": get_tars_mode(),
+        "local_mode": get_connection_mode(),
+        "active_pc": get_active_pc_info(),
+        "cerebro": "opencode"
+    }
+
+    msg_id = str(estado.get("assistant_message_id") or "")
+    entregado = OPENCODE_ENTREGADOS.get(client_chat_id or "", "")
+    if turno and not proc_info.get("is_processing") and msg_id and msg_id != entregado:
+        contenido = str(estado.get("last_message") or "")
+        texto_original_tenia_respuesta = bool(contenido.strip())
+        if not texto_original_tenia_respuesta:
+            error_turno = str(estado.get("error") or "")
+            if error_turno:
+                contenido = f"OpenCode no pudo completar la respuesta: {error_turno[:180]}"
+            else:
+                # El turno termino bien pero el estado en memoria llego sin el
+                # texto (stream corto a mitad). Reconcila con el historial por
+                # API: el ultimo mensaje del rol tars es la respuesta real.
+                chat_real = str(turno.get("chat_resuelto") or "")
+                if chat_real:
+                    puente_reconcila = get_puente_opencode()
+                    if puente_reconcila is not None:
+                        try:
+                            entradas = puente_reconcila.historial_chat(chat_real, limite=3)
+                            for entrada in reversed(entradas):
+                                if str(entrada.get("rol") or "") == "tars":
+                                    texto_hist = str(entrada.get("texto") or "").strip()
+                                    if texto_hist:
+                                        contenido = texto_hist
+                                        break
+                        except Exception as e:
+                            print(f"[TARS Web] Reconciliacion de texto del turno no disponible ({chat_real}): {e}")
+            if not contenido:
+                contenido = "OpenCode no devolvio texto esta vez."
+        if contenido.strip():
+            idx = int(time.time())
+            anterior = OPENCODE_ULTIMO_IDX.get(client_chat_id or "", 0)
+            if idx <= anterior:
+                idx = anterior + 1
+            if client_chat_id:
+                OPENCODE_ENTREGADOS[client_chat_id] = msg_id
+                OPENCODE_ULTIMO_IDX[client_chat_id] = idx
+                registros = TTS_TEXTOS_PUENTE.setdefault(client_chat_id, {})
+                registros[idx] = contenido
+                if len(registros) > 10:
+                    TTS_TEXTOS_PUENTE[client_chat_id] = {k: v for k, v in list(registros.items())[-10:] if k != idx}
+                    registros = TTS_TEXTOS_PUENTE[client_chat_id]
+                    registros.setdefault(idx, contenido)
+            media = await asyncio.to_thread(collect_turn_media_and_files, contenido, proc_info)
+            audio_url = None
+            clean_text = extract_conversational_speech(contenido)
+            if clean_text in TTS_CACHE:
+                cached = TTS_CACHE[clean_text]
+                if os.path.exists(os.path.join(MEDIA_DIR, os.path.basename(cached))):
+                    audio_url = cached
+            if not audio_url and texto_original_tenia_respuesta and not get_mobile_voice_muted():
+                asyncio.create_task(generate_tts_file(contenido))
+            audio_url = audio_url or f"/api/tts?step={idx}&chat_id={client_chat_id}"
+            data.update({
+                "has_new": True,
+                "step_index": idx,
+                "content": contenido,
+                "media": media,
+                "audio_url": audio_url
+            })
+    return web.json_response(data)
 
 def format_friendly_pc_name(hostname, ip=""):
     h = (hostname or "").strip()
@@ -2809,6 +3423,33 @@ async def handle_get_chats(request):
         combined = list(local_chats)
         combined.extend(remote_chats_all)
 
+    # Chats con sesion de OpenCode: conviven en el selector y se marcan (M3).
+    # Solo de esta PC local; entre nodos (local_only) no se ofrecen, cada PC
+    # publica los suyos cuando su cerebro activo es OpenCode.
+    if mode != "local_only":
+        mapa_open = chats_opencode_mapeados()
+        ultimo_chat_open = ""
+        ultima_actualizacion = 0
+        for cid, entrada in mapa_open.items():
+            actualizado = int(entrada.get("actualizado") or 0)
+            if actualizado >= ultima_actualizacion:
+                ultima_actualizacion, ultimo_chat_open = actualizado, cid
+        cerebro_local = get_cerebro()
+        for cid, entrada in mapa_open.items():
+            combined.append({
+                "id": cid,
+                "title": entrada.get("titulo") or "Chat OpenCode",
+                "is_local": True,
+                "active": cid == ultimo_chat_open,
+                "cerebro": "opencode",
+                "pc_id": ""
+            })
+        if cerebro_local == "opencode" and ultimo_chat_open:
+            current_id = ultimo_chat_open
+            if combined:
+                for c in combined:
+                    c["active"] = (c.get("id") == ultimo_chat_open)
+
     return web.json_response({
         "current_id": current_id,
         "active_pc": get_active_pc_info(),
@@ -2837,6 +3478,21 @@ async def handle_switch_chat(request):
 
         my_ts = get_tailscale_ip()
         my_loc = get_local_ip()
+
+        # Chat con sesion de OpenCode: resolvemos historial por el puente sin
+        # tocar Antigravity (M3). Lectura pura.
+        mapa_open = chats_opencode_mapeados()
+        if target in mapa_open:
+            hist = await asyncio.to_thread(historial_desde_puente, target, 10)
+            return web.json_response({
+                "success": True,
+                "id": target,
+                "title": mapa_open[target].get("titulo") or "Chat OpenCode",
+                "messages": hist.get("messages", []),
+                "last_step_index": hist.get("last_step_index", 0),
+                "cerebro": "opencode",
+                "active_pc": get_active_pc_info()
+            })
 
         # Si el chat pertenece a una PC remota
         if target_pc_id and target_pc_id not in ("local", "127.0.0.1", "localhost", my_ts, my_loc):
@@ -3019,6 +3675,10 @@ async def handle_get_models(request):
         rem_models = await asyncio.to_thread(remote_api_request, rem_ip, "/api/models", "GET")
         if isinstance(rem_models, dict) and "models" in rem_models:
             return web.json_response(rem_models)
+    # Cerebro OpenCode: modelos desde el puente, misma forma del modal (M4)
+    if get_cerebro() == "opencode":
+        data = await asyncio.to_thread(modelos_desde_puente)
+        return web.json_response(data)
     data = await asyncio.to_thread(get_antigravity_models)
     return web.json_response(data)
 
@@ -3030,6 +3690,30 @@ async def handle_switch_model(request):
             rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/switch_model", "POST", data)
             if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
                 return web.json_response(rem_res)
+        # Cerebro OpenCode: aplicar el modelo al chat activo via puente (M4)
+        if get_cerebro() == "opencode":
+            body = data or {}
+            modelo_id = str(body.get("model_id") or body.get("id") or "").strip()
+            if not modelo_id:
+                crudo = str(body.get("model") or body.get("name") or "").strip()
+                if "/" in crudo:
+                    pref, _separador, resto = crudo.partition("/")
+                    if resto:
+                        modelo_id = resto
+                    else:
+                        modelo_id = pref
+                else:
+                    modelo_id = crudo
+            variante = str(body.get("variant") or body.get("effort") or "").strip() or None
+            proveedor = str(body.get("provider") or "").strip() or None
+            res = await asyncio.to_thread(
+                aplicar_modelo_puente,
+                modelo_id,
+                variante,
+                proveedor,
+                str(body.get("chat_id") or "").strip() or None
+            )
+            return web.json_response(res)
         model_name = data.get("model") or data.get("name") or ""
         effort = data.get("effort") or None
         res = await asyncio.to_thread(switch_antigravity_model, model_name, effort)
@@ -3219,6 +3903,10 @@ async def handle_cancel(request):
         rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/cancel", "POST", {})
         if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
             return web.json_response(rem_res)
+    # Cerebro OpenCode: interrumpe los turnos corriendo en el puente (M3)
+    if get_cerebro() == "opencode":
+        res = await asyncio.to_thread(cancelar_puente_todos)
+        return web.json_response(res)
     res = await asyncio.to_thread(cancel_antigravity_ide)
     return web.json_response(res)
 
@@ -3298,6 +3986,10 @@ def init_app():
     app.router.add_post("/api/switch_chat", handle_switch_chat)
     app.router.add_get("/api/models", handle_get_models)
     app.router.add_post("/api/switch_model", handle_switch_model)
+    app.router.add_get("/api/cerebro", handle_get_cerebro)
+    app.router.add_post("/api/cerebro", handle_set_cerebro)
+    app.router.add_get("/api/opencode/permissions", handle_opencode_permissions)
+    app.router.add_post("/api/opencode/permission/reply", handle_opencode_permission_reply)
     app.router.add_post("/api/toggle_pc_sound", handle_toggle_pc_sound)
     app.router.add_get("/api/pc_sound", handle_get_pc_sound)
     app.router.add_get("/api/mode", handle_get_mode)
@@ -3500,6 +4192,10 @@ async def watch_transcript_for_push():
             rem_sync = await asyncio.to_thread(remote_api_request, rem_ip, "/api/sync?last_index=999999", "GET", None, 2.5)
             if isinstance(rem_sync, dict):
                 LAST_NOTIFIED_STEP["idx"] = int(rem_sync.get("step_index") or 0)
+        elif get_cerebro() == "opencode":
+            # Marcar lo ya presente como notificado: solo empujamos turnos nuevos
+            for listo in await asyncio.to_thread(turnos_listos_para_push):
+                PUSH_ENTREGADOS_PUENTE[listo["chat_id"]] = listo["msg_id"]
         else:
             idx, _, _ = await asyncio.to_thread(get_latest_transcript_message)
             LAST_NOTIFIED_STEP["idx"] = idx
@@ -3519,6 +4215,31 @@ async def watch_transcript_for_push():
                     # La PC remota maneja sus propios push notifications directamente
                     await asyncio.sleep(2.0)
                     continue
+            elif get_cerebro() == "opencode":
+                # Turnos de OpenCode: push al entrar en idle con respuesta sin avisar
+                listos = await asyncio.to_thread(turnos_listos_para_push)
+                for listo in listos:
+                    PUSH_ENTREGADOS_PUENTE[listo["chat_id"]] = listo["msg_id"]
+                    await asyncio.to_thread(
+                        send_web_push_all,
+                        "TARS - OpenCode",
+                        listo["contenido"],
+                        "/",
+                        "tars-latest-notification"
+                    )
+                # Permisos pendientes: push una vez por pedido
+                permisos = await asyncio.to_thread(permisos_para_push)
+                for ficha in permisos:
+                    PUSH_PERMISOS_ENVIADOS[ficha["chat_id"]] = ficha["request_id"]
+                    detalle = ", ".join(str(r) for r in (ficha.get("resources") or [])[:3])
+                    cuerpo = f"TARS pide permiso {ficha.get('action') or ''}: {detalle}" if detalle else "TARS esta esperando tu permiso para seguir."
+                    await asyncio.to_thread(
+                        send_web_push_all,
+                        "TARS - Permiso pendiente",
+                        cuerpo,
+                        "/",
+                        "tars-permission-notification"
+                    )
             else:
                 latest_idx, latest_msg, proc_info = await asyncio.to_thread(get_latest_transcript_message)
                 if not proc_info.get("is_processing") and latest_idx > LAST_NOTIFIED_STEP["idx"] and latest_msg:
