@@ -2306,7 +2306,9 @@ async def handle_chat_history(request):
     # transcript de Antigravity (M3). Lectura pura: si el chat no esta mapeado
     # no se crea sesion nueva, cae al camino de Antigravity.
     if chat_id and chat_id in chats_opencode_mapeados():
-        data = await asyncio.to_thread(historial_desde_puente, chat_id, limit)
+        # Ventana amplia: en OpenCode la conversacion completa es lo que se ve
+        # en el historial de la sesion, no el recorte de 10 de Antigravity.
+        data = await asyncio.to_thread(historial_desde_puente, chat_id, max(limit, 100))
         return web.json_response(data)
 
     if not chat_id:
@@ -3484,7 +3486,11 @@ async def handle_get_chats(request):
         # Sesiones de OpenCode vivas sin chat de TARS: aparecen por su
         # sessionID con su titulo real y no necesitan haber tenido un turno
         # desde la app. Al elegirlas, switch_chat escribe el vinculo.
+        # Sesiones de OpenCode vivas sin chat de TARS: aparecen por su
+        # sessionID con su titulo real y no necesitan haber tenido un turno
+        # desde la app. Al elegirlas, switch_chat escribe el vinculo.
         sids_listados = await asyncio.to_thread(sesiones_opencode_listadas)
+        titulos_vivos = {s["session_id"]: s["titulo"] for s in sids_listados}
         for sesion in sids_listados:
             sid = sesion["session_id"]
             if sid in sids_mapeados:
@@ -3497,6 +3503,15 @@ async def handle_get_chats(request):
                 "cerebro": "opencode",
                 "pc_id": ""
             })
+        # Titulos siempre frescos: si OpenCode retitulo la sesion, uso el vivo
+        # solo en la respuesta, sin reescribir el mapa desde una lectura.
+        for chat in combined:
+            if chat.get("cerebro") != "opencode":
+                continue
+            entrada_mapa = mapa_open.get(chat["id"]) or {}
+            vivo = titulos_vivos.get(str(entrada_mapa.get("session_id") or ""))
+            if vivo:
+                chat["title"] = vivo
         if cerebro_local == "opencode" and ultimo_chat_open:
             current_id = ultimo_chat_open
             if combined:
@@ -3559,7 +3574,9 @@ async def handle_switch_chat(request):
                     print(f"[TARS Web] Error vinculando sesion de OpenCode ({str(target)[:16]}): {e}")
 
         if target in mapa_open:
-            hist = await asyncio.to_thread(historial_desde_puente, target, 10)
+            # Historial completo de la sesion: "todo lo que se ve en OpenCode",
+            # no solo los ultimos 10 turnos del camino de Antigravity.
+            hist = await asyncio.to_thread(historial_desde_puente, target, 100)
             return web.json_response({
                 "success": True,
                 "id": target,

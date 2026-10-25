@@ -1676,21 +1676,48 @@ function closeChatsModal() {
     chatsModal.classList.add('hidden');
 }
 
+let currentChatsTab = 'antigravity';
+
+function updateChatsTabsUI() {
+    const tabAgy = document.getElementById('chats-tab-agy');
+    const tabOpen = document.getElementById('chats-tab-open');
+    if (!tabAgy || !tabOpen) return;
+    tabAgy.classList.toggle('active', currentChatsTab !== 'opencode');
+    tabOpen.classList.toggle('active', currentChatsTab === 'opencode');
+}
+
 async function loadChatsList() {
     if (!chatsList) return;
     chatsList.innerHTML = '<div class="loading-chats">Buscando chats abiertos...</div>';
     try {
         const resp = await fetch('/api/chats');
         const data = await resp.json();
-        const chats = data.chats || [];
-        activeChatId = data.current_id || '';
+        let chats = data.chats || [];
+
+        // No pisar el chat que el usuario ya tiene abierto: solo adoptar el
+        // current del server si el activo ya no existe o no se eligio nunca.
+        const existeActivo = activeChatId && chats.some(c => c.id === activeChatId);
+        if (data.current_id && !existeActivo) {
+            activeChatId = data.current_id;
+        }
 
         if (data.active_pc && typeof updateActivePcUI === 'function') {
             updateActivePcUI(data.active_pc);
         }
 
+        // Filtro por cerebro: tabs separados de OpenCode y Antigravity
+        if (currentChatsTab === 'opencode') {
+            chats = chats.filter(c => c.cerebro === 'opencode');
+        } else {
+            chats = chats.filter(c => c.cerebro !== 'opencode');
+        }
+
+        updateChatsTabsUI();
+
         if (chats.length === 0) {
-            const msg = data.error || 'No se detectaron chats abiertos';
+            const msg = currentChatsTab === 'opencode'
+                ? 'Sin chats en OpenCode todavia'
+                : (data.error || 'No se detectaron chats abiertos');
             chatsList.innerHTML = `<div class="empty-chats">${msg}</div>`;
             return;
         }
@@ -1699,10 +1726,10 @@ async function loadChatsList() {
         chats.forEach(chat => {
             const item = document.createElement('div');
             const isOffline = chat.pc_online === false;
-            item.className = `chat-item ${chat.active ? 'active' : ''} ${isOffline ? 'chat-item-offline' : ''}`;
+            item.className = `chat-item ${(chat.id === activeChatId && chat.active) ? 'active' : ''} ${isOffline ? 'chat-item-offline' : ''}`;
             
             const pcBadgeClass = chat.is_local ? 'local' : (isOffline ? 'offline' : 'remote');
-            const pcName = chat.pc_name || (chat.is_local ? 'Local' : 'Remoto');
+            const pcName = chat.cerebro === 'opencode' ? 'OpenCode' : (chat.pc_name || (chat.is_local ? 'Local' : 'Remoto'));
             const statusTag = isOffline ? '<span class="chat-offline-tag">Offline</span>' : '';
             const activeBadge = chat.active ? '<span class="chat-item-badge">Activo</span>' : '';
 
@@ -1875,6 +1902,22 @@ if (chatsModalClose) {
 if (chatsModalOverlay) {
     chatsModalOverlay.addEventListener('click', closeChatsModal);
 }
+
+// ===== TABS DE CEREBRO EN EL MODAL DE CHATS =====
+const chatsTabAgy = document.getElementById('chats-tab-agy');
+const chatsTabOpen = document.getElementById('chats-tab-open');
+function setChatsTab(tab) {
+    currentChatsTab = (tab === 'opencode') ? 'opencode' : 'antigravity';
+    try { localStorage.setItem('tars_chats_tab', currentChatsTab); } catch (e) {}
+    updateChatsTabsUI();
+    loadChatsList();
+}
+if (chatsTabAgy) chatsTabAgy.addEventListener('click', () => setChatsTab('antigravity'));
+if (chatsTabOpen) chatsTabOpen.addEventListener('click', () => setChatsTab('opencode'));
+try {
+    const tabGuardado = localStorage.getItem('tars_chats_tab');
+    if (tabGuardado === 'opencode') currentChatsTab = 'opencode';
+} catch (e) {}
 if (prevChatBtn) {
     prevChatBtn.addEventListener('click', () => switchAntigravityChat('anterior'));
 }
