@@ -2428,6 +2428,42 @@ def elegir_chat_opencode(client_chat_id):
             mejor, mejor_orden = cid, orden
     return mejor
 
+def sesiones_opencode_listadas(limite=14):
+    """
+    Sesiones vivas de OpenCode para el selector de chats.
+
+    Solo sesiones raiz con actividad (tokens o costo), para no ofrecer
+    conchas vacias. Lectura pura: no crea ni vincula nada. Las ya mapeadas
+    se saltan: esas salen del mapa con su chat_id de TARS.
+    """
+    puente = get_puente_opencode()
+    if puente is None:
+        return []
+    try:
+        sesiones = puente.listar_sesiones(limite=limite, solo_raices=True)
+    except Exception as e:
+        print(f"[TARS Web] Error listando sesiones de OpenCode: {e}")
+        return []
+    salida = []
+    for sesion in sesiones:
+        sid = str(sesion.get("session_id") or "")
+        if not sid or not sid.startswith("ses_"):
+            continue
+        if sesion.get("chat_id"):
+            continue
+        tokens = sesion.get("tokens") or {}
+        total = int(tokens.get("input") or 0) + int(tokens.get("output") or 0)
+        costo = float(sesion.get("costo") or 0)
+        if total <= 0 and costo <= 0:
+            continue
+        salida.append({
+            "session_id": sid,
+            "titulo": str(sesion.get("titulo") or "Chat OpenCode"),
+            "actualizada": int(sesion.get("actualizada") or 0)
+        })
+    salida.sort(key=lambda s: s["actualizada"], reverse=True)
+    return salida
+
 def _proc_info_vacia():
     return {
         "is_processing": False,
@@ -3435,12 +3471,29 @@ async def handle_get_chats(request):
             if actualizado >= ultima_actualizacion:
                 ultima_actualizacion, ultimo_chat_open = actualizado, cid
         cerebro_local = get_cerebro()
+        sids_mapeados = {str(e.get("session_id") or "") for e in mapa_open.values()}
         for cid, entrada in mapa_open.items():
             combined.append({
                 "id": cid,
                 "title": entrada.get("titulo") or "Chat OpenCode",
                 "is_local": True,
                 "active": cid == ultimo_chat_open,
+                "cerebro": "opencode",
+                "pc_id": ""
+            })
+        # Sesiones de OpenCode vivas sin chat de TARS: aparecen por su
+        # sessionID con su titulo real y no necesitan haber tenido un turno
+        # desde la app. Al elegirlas, switch_chat escribe el vinculo.
+        sids_listados = await asyncio.to_thread(sesiones_opencode_listadas)
+        for sesion in sids_listados:
+            sid = sesion["session_id"]
+            if sid in sids_mapeados:
+                continue
+            combined.append({
+                "id": sid,
+                "title": sesion["titulo"] or "Chat OpenCode",
+                "is_local": True,
+                "active": False,
                 "cerebro": "opencode",
                 "pc_id": ""
             })
@@ -3482,6 +3535,29 @@ async def handle_switch_chat(request):
         # Chat con sesion de OpenCode: resolvemos historial por el puente sin
         # tocar Antigravity (M3). Lectura pura.
         mapa_open = chats_opencode_mapeados()
+
+        # Sesion de OpenCode elegida directo del selector por su sessionID y
+        # sin vinculo en el mapa: el switch escribe el vinculo (unico dato que
+        # persiste; no crea sesion ni toca Antigravity) y sigue por el camino
+        # del mapa, igual que un chat viejo.
+        if target not in mapa_open and str(target).startswith("ses_"):
+            puente_vincula = get_puente_opencode()
+            if puente_vincula is not None:
+                try:
+                    candidatos = await asyncio.to_thread(puente_vincula.listar_sesiones, 60)
+                    elegida = next((s for s in candidatos if s.get("session_id") == target), None)
+                    if elegida is not None:
+                        await asyncio.to_thread(
+                            puente_vincula.vincular_chat,
+                            target,
+                            target,
+                            str(elegida.get("titulo") or "Chat OpenCode")
+                        )
+                        mapa_open = chats_opencode_mapeados()
+                        print(f"[TARS Web] Chat OpenCode vinculado desde el selector: {target[:16]}")
+                except Exception as e:
+                    print(f"[TARS Web] Error vinculando sesion de OpenCode ({str(target)[:16]}): {e}")
+
         if target in mapa_open:
             hist = await asyncio.to_thread(historial_desde_puente, target, 10)
             return web.json_response({
