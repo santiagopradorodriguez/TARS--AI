@@ -40,6 +40,10 @@ signal.signal(signal.SIGTERM, cleanup)
 
 def main():
     try:
+        # Interrumpir cualquier instancia previa de paplay que haya quedado ejecutándose
+        subprocess.run(["pkill", "-9", "-f", "paplay.*antigravity_response"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
         with open(LOCK_FILE, "w") as f:
             f.write(str(os.getpid()))
         

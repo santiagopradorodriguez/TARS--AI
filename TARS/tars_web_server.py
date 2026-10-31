@@ -478,7 +478,28 @@ def clean_convo_id(raw_id, prefer_id=None):
 
 
 def get_current_antigravity_convo_id(prefer_id=None):
-    js = "decodeURIComponent(window.location.pathname.replace('/c/', '').split('?')[0])"
+    js = """(() => {
+        // 1. Vista de conversación actualmente abierta en pantalla
+        const view = document.querySelector('[data-testid="conversation-view"]');
+        if (view && view.getAttribute('data-cascade-id')) {
+            return view.getAttribute('data-cascade-id');
+        }
+        // 2. Pathname de URL si usa /c/
+        const path = window.location.pathname || '';
+        if (path.includes('/c/')) {
+            return decodeURIComponent(path.replace('/c/', '').split('?')[0]);
+        }
+        // 3. Fila seleccionada en el sidebar de Antigravity
+        const activeRow = document.querySelector('[data-testid="conversation-row-sidebar"][data-selected="true"]');
+        if (activeRow && activeRow.getAttribute('data-cascade-id')) {
+            return activeRow.getAttribute('data-cascade-id');
+        }
+        const activeLink = document.querySelector('a[href*="/c/"][class*="active"], [data-selected="true"] a[href*="/c/"]');
+        if (activeLink && activeLink.getAttribute('href')) {
+            return activeLink.getAttribute('href').replace('/c/', '').split('?')[0];
+        }
+        return '';
+    })()"""
     val = eval_in_antigravity(js)
     if val and isinstance(val, str) and len(val) > 10:
         cleaned = clean_convo_id(val.strip(), prefer_id=prefer_id)
@@ -1185,10 +1206,14 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
     media = []
     sent_to_ide = False
 
+    # El cerebro lo decide el chat al que va el turno, no el switch global:
+    # asi los chats de OpenCode y de Antigravity se pueden usar a la vez.
+    cerebro_turno = cerebro_para_chat(target_chat_id)
+
     # Si hay archivos adjuntos y el cerebro no es OpenCode, enviarlos
     # prioritariamente a Antigravity IDE. Con OpenCode, los archivos van como
     # attachment del prompt (ver nivel del puente abajo).
-    if file_paths and len(file_paths) > 0 and get_cerebro() != "opencode":
+    if file_paths and len(file_paths) > 0 and cerebro_turno != "opencode":
         if send_to_antigravity_ide(command_text, target_chat_id=target_chat_id, file_paths=file_paths):
             sent_to_ide = True
             return "Archivos inyectados en Antigravity IDE.", media, sent_to_ide
@@ -1316,7 +1341,7 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
     # 6. Cerebro OpenCode: nivel de degradacion entre los shortcuts y Antigravity.
     # El prompt viaja por el puente y el turno se sigue por eventos: la respuesta
     # la entrega /api/sync cuando el turno entra en idle, igual que con Antigravity.
-    if get_cerebro() == "opencode":
+    if cerebro_turno == "opencode":
         aviso_opencode = ""
         try:
             puente = get_puente_opencode()
@@ -2052,7 +2077,10 @@ async def handle_sync(request):
     # Ojo: aca se usa el id crudo del cliente, no pasamos por clean_convo_id,
     # porque los ids de chats de OpenCode no existen en el brain de Antigravity
     # y esa funcion los volveria vacios desalineando el registro entregado.
-    if get_cerebro() == "opencode":
+    # Con la coexistencia de cerebros, manda el chat pedido: si es de OpenCode
+    # se vuelve por el puente aunque el tray este en antigravity.
+    cerebro_sync = cerebro_para_chat(raw_client_chat.split("?")[0].strip()) if raw_client_chat else get_cerebro()
+    if cerebro_sync == "opencode":
         return await sincronizar_desde_puente(last_idx, raw_client_chat.split("?")[0].strip())
 
     active_id = await asyncio.to_thread(get_current_antigravity_convo_id, client_chat_id) or ""
@@ -2376,6 +2404,34 @@ def set_cerebro(valor):
     if valor not in ("opencode", "antigravity"):
         return False
     return _write_tars_state({"cerebro": valor})
+
+# Chats de voz por defecto: siguen la eleccion global del tray para que el
+# selector de cerebro siga mandando en la voz de PCs, celular y F12.
+CHATS_VOZ_GLOBALES = ("voz_pc", "tars_celular")
+
+def cerebro_para_chat(chat_id, por_defecto=None):
+    """
+    Cerebro del chat pedido, para poder usar los dos a la vez.
+
+    Los chats con sesion de OpenCode (mapeados en opencode_sessions.json o con
+    sessionID como id) viajan por el puente aunque el tray este en antigravity.
+    Los demas van a Antigravity. Sin chat explicito (o con un chat de voz por
+    defecto) manda la eleccion global, que es lo que maneja el selector.
+    """
+    if por_defecto is None:
+        por_defecto = get_cerebro()
+    cid = str(chat_id or "").split("?")[0].strip()
+    if not cid or cid in CHATS_VOZ_GLOBALES:
+        return por_defecto
+    try:
+        if cid in chats_opencode_mapeados():
+            return "opencode"
+    except Exception:
+        pass
+    if cid.startswith("ses_"):
+        # id crudo de sesion de OpenCode: switch_chat todavia no escribio el mapa
+        return "opencode"
+    return "antigravity"
 
 def get_puente_opencode():
     """Singleton del puente con OpenCode, con import perezoso y reintento corto."""
@@ -3479,7 +3535,7 @@ async def handle_get_chats(request):
                 "id": cid,
                 "title": entrada.get("titulo") or "Chat OpenCode",
                 "is_local": True,
-                "active": cid == ultimo_chat_open,
+                "active": (cerebro_local == "opencode" and cid == ultimo_chat_open),
                 "cerebro": "opencode",
                 "pc_id": ""
             })

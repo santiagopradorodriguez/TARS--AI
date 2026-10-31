@@ -254,7 +254,11 @@ def main():
                 # Kill previous playback immediately so it stops talking right away
                 subprocess.run(["pkill", "-9", "-f", "ffplay.*antigravity_response"], 
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["pkill", "-9", "-f", "paplay.*antigravity_response"], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.run(["pkill", "-9", "-f", "tars_player.py"], 
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["pkill", "-9", "-f", "paplay"], 
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 # Sintetizar usando el motor dual (Puck o Edge-TTS según selección)
                 wav_file = OUTPUT_FILE.replace(".mp3", ".wav")

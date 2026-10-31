@@ -386,8 +386,12 @@ const playIcon = document.getElementById('play-icon');
 
 function stopCurrentAudio() {
     if (currentAudio) {
-        currentAudio.pause();
-        currentAudio.currentTime = 0;
+        try {
+            currentAudio.pause();
+            currentAudio.currentTime = 0;
+            currentAudio.src = '';
+            currentAudio.load();
+        } catch (e) {}
         currentAudio = null;
     }
     if (currentAudioBtn) {

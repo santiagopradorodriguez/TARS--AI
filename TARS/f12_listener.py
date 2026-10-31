@@ -13,8 +13,10 @@ RECORD_END_TONE = "/home/santiago/.gemini/config/tars_record_end.wav"
 CHIME_FILE = "/home/santiago/.gemini/config/gemini_chime.wav"
 DICTATING_LOCK = "/tmp/tars_dictating.lock"
 CHATGPT_DICTATING_LOCK = "/tmp/chatgpt_dictating.lock"
+OPENCODE_DICTATING_LOCK = "/tmp/opencode_dictating.lock"
 SPEAKING_LOCK = "/tmp/tars_speaking.lock"
 CHATGPT_VOICE_WAV = "/tmp/chatgpt_voice.wav"
+OPENCODE_VOICE_WAV = "/tmp/opencode_voice.wav"
 PYTHON_WHISPER = "/home/santiago/repositorios/CosmicGenerator/venv/bin/python3"
 
 tap_times = []
@@ -94,7 +96,9 @@ def send_enter():
 def stop_all_speech():
     subprocess.run(["pkill", "-9", "-f", "paplay.*antigravity_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["pkill", "-9", "-f", "paplay.*chatgpt_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["pkill", "-9", "-f", "paplay.*opencode_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["pkill", "-9", "-f", "paplay.*wa_msg"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["pkill", "-9", "-f", "ffplay.*opencode_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["pkill", "-9", "-f", "ffplay.*antigravity_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["pkill", "-9", "-f", "ffplay.*chatgpt_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["pkill", "-9", "-f", "tars_player.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -118,22 +122,29 @@ def trigger_killswitch():
         except Exception:
             pass
         subprocess.run(["pkill", "-9", "-f", "arecord.*chatgpt_voice.wav"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if os.path.exists(OPENCODE_DICTATING_LOCK):
+        try:
+            os.remove(OPENCODE_DICTATING_LOCK)
+        except Exception:
+            pass
+        subprocess.run(["pkill", "-9", "-f", "arecord.*opencode_voice.wav"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     set_mode("off")
     play_sound(CANCEL_TONE)
 
-def process_chatgpt_transcription():
+def process_chatgpt_transcription(wav_path=None):
+    wav = wav_path or CHATGPT_VOICE_WAV
     try:
         script = """
 import whisper, sys
 try:
     model = whisper.load_model("tiny")
-    res = model.transcribe("/tmp/chatgpt_voice.wav", language="es", fp16=False)
+    res = model.transcribe("%s", language="es", fp16=False)
     text = res.get("text", "").strip()
     if text:
         sys.stdout.write(text)
 except Exception:
     pass
-"""
+""" % wav
         out = subprocess.check_output([PYTHON_WHISPER, "-c", script], text=True).strip()
         if out:
             controller = keyboard.Controller()
@@ -153,8 +164,26 @@ def trigger_single_action():
 
     active_win = get_active_window()
     is_chatgpt = "chatgpt" in active_win or "codex" in active_win
+    is_opencode = "opencode" in active_win
 
-    if is_chatgpt:
+    if is_opencode:
+        # Modo dictado para OpenCode (TUI o app, ventana enfocada)
+        if os.path.exists(OPENCODE_DICTATING_LOCK):
+            try:
+                os.remove(OPENCODE_DICTATING_LOCK)
+            except Exception:
+                pass
+            play_sound(RECORD_END_TONE)
+            subprocess.run(["pkill", "-INT", "-f", "arecord.*opencode_voice.wav"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(0.05)
+            threading.Thread(target=process_chatgpt_transcription, args=(OPENCODE_VOICE_WAV,), daemon=True).start()
+        else:
+            with open(OPENCODE_DICTATING_LOCK, "w") as f:
+                f.write("1")
+            play_sound(RECORD_START_TONE)
+            subprocess.Popen(["arecord", "-D", "default", "-r", "16000", "-c", "1", "-f", "S16_LE", OPENCODE_VOICE_WAV],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    elif is_chatgpt:
         # Modo dictado inteligente para ChatGPT
         if os.path.exists(CHATGPT_DICTATING_LOCK):
             try:
@@ -206,7 +235,7 @@ def on_press(key):
     trigger_single_action()
 
 def main():
-    for lock in [DICTATING_LOCK, CHATGPT_DICTATING_LOCK]:
+    for lock in [DICTATING_LOCK, CHATGPT_DICTATING_LOCK, OPENCODE_DICTATING_LOCK]:
         if os.path.exists(lock):
             try:
                 os.remove(lock)

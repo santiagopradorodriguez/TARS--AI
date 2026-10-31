@@ -93,7 +93,7 @@ def clean_edge_text(t):
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
-async def _synthesize_edge_async(text, output_wav):
+async def _synthesize_edge_async(text, output_wav, voz=None):
     text = clean_edge_text(text)
     tmp_mp3 = output_wav + ".tmp.mp3"
     try:
@@ -104,7 +104,7 @@ async def _synthesize_edge_async(text, output_wav):
     except Exception:
         pass
 
-    communicate = edge_tts.Communicate(text, DEFAULT_EDGE_VOICE, rate="-5%")
+    communicate = edge_tts.Communicate(text, voz or DEFAULT_EDGE_VOICE, rate="-5%")
     await communicate.save(tmp_mp3)
 
     if os.path.exists(tmp_mp3) and os.path.getsize(tmp_mp3) > 100:
@@ -117,9 +117,13 @@ async def _synthesize_edge_async(text, output_wav):
         return os.path.exists(output_wav) and os.path.getsize(output_wav) > 100
     return False
 
-def synthesize_edge(text, output_wav):
+def synthesize_edge(text, output_wav, voz=None):
+    """
+    Sintetiza con Edge-TTS. voz acepta el nombre exacto de la voz Edge, por
+    ejemplo es-AR-ElenaNeural. Sin voz usa la de fabrica (Tomás).
+    """
     try:
-        return asyncio.run(_synthesize_edge_async(text, output_wav))
+        return asyncio.run(_synthesize_edge_async(text, output_wav, voz))
     except Exception as e:
         print(f"Error Edge-TTS: {e}", file=sys.stderr)
         return False
@@ -202,6 +206,10 @@ def synthesize_puck(text, output_wav):
         print(f"Fallo síntesis Puck ({e}). Usando fallback Edge-TTS.", file=sys.stderr)
         return False
 
+def es_voz_edge(nombre):
+    """True si el nombre guardado es una voz Edge con nombre propio."""
+    return bool(nombre) and "Neural" in nombre and nombre.startswith("es")
+
 def synthesize_speech(text, output_wav, voice=None):
     if voice is None:
         voice = get_voice()
@@ -213,7 +221,7 @@ def synthesize_speech(text, output_wav, voice=None):
         # Fallback automático a Edge si falla Puck
         return synthesize_edge(text, output_wav)
     else:
-        return synthesize_edge(text, output_wav)
+        return synthesize_edge(text, output_wav, voice if es_voz_edge(voice) else None)
 
 if __name__ == "__main__":
     if len(sys.argv) > 2:
