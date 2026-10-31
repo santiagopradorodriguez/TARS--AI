@@ -4,6 +4,8 @@ import os
 import json
 import subprocess
 import threading
+import asyncio
+import websockets
 from pynput import keyboard
 
 STATE_FILE = "/home/santiago/.gemini/config/tars_state.json"
@@ -74,6 +76,40 @@ def get_active_window():
     except Exception:
         pass
     return ""
+
+def is_antigravity_actually_recording():
+    """Consulta directamente al DOM de Antigravity via DevTools CDP para saber si está grabando."""
+    try:
+        port_file = os.path.expanduser("~/.config/Antigravity/DevToolsActivePort")
+        if not os.path.exists(port_file):
+            return None
+        with open(port_file, "r") as f:
+            port = f.readline().strip()
+        if not port:
+            return None
+
+        import urllib.request
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=0.8) as resp:
+            targets = json.loads(resp.read().decode())
+        page = next((t for t in targets if t.get("type") == "page"), None)
+        if not page or not page.get("webSocketDebuggerUrl"):
+            return None
+
+        async def _check():
+            async with websockets.connect(page["webSocketDebuggerUrl"], open_timeout=0.8, close_timeout=0.8) as ws:
+                await ws.send(json.dumps({
+                    "id": 888,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": "Boolean(document.querySelector('button[aria-label=\"Stop recording\"]'))"}
+                }))
+                while True:
+                    msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=0.8))
+                    if msg.get("id") == 888:
+                        return bool(msg.get("result", {}).get("result", {}).get("value"))
+
+        return asyncio.run(_check())
+    except Exception:
+        return None
 
 def send_ctrl_m():
     controller = keyboard.Controller()
@@ -201,10 +237,17 @@ def trigger_single_action():
             subprocess.Popen(["arecord", "-D", "default", "-r", "16000", "-c", "1", "-f", "S16_LE", CHATGPT_VOICE_WAV],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
-        # Modo nativo para Antigravity
-        if os.path.exists(DICTATING_LOCK):
+        # Modo nativo para Antigravity: verificar estado real en el DOM
+        actual_rec = is_antigravity_actually_recording()
+        if actual_rec is not None:
+            is_recording = actual_rec
+        else:
+            is_recording = os.path.exists(DICTATING_LOCK)
+
+        if is_recording:
             try:
-                os.remove(DICTATING_LOCK)
+                if os.path.exists(DICTATING_LOCK):
+                    os.remove(DICTATING_LOCK)
             except Exception:
                 pass
             play_sound(RECORD_END_TONE)
