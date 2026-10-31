@@ -1205,6 +1205,7 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
     reply = ""
     media = []
     sent_to_ide = False
+    aviso_opencode = ""
 
     # El cerebro lo decide el chat al que va el turno, no el switch global:
     # asi los chats de OpenCode y de Antigravity se pueden usar a la vez.
