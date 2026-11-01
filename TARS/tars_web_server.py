@@ -3880,9 +3880,33 @@ def get_vapid_keys():
     try:
         if os.path.exists(VAPID_FILE):
             with open(VAPID_FILE, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                if data.get("public_key") and data.get("private_pem"):
+                    return data
     except Exception:
         pass
+
+    # Generar llaves VAPID automáticamente si no existen para que WebPush funcione sin configuración manual
+    try:
+        import base64
+        from py_vapid import Vapid
+        from cryptography.hazmat.primitives import serialization
+        v = Vapid()
+        v.generate_keys()
+        priv = v.private_pem().decode("utf-8")
+        raw_pub = v.public_key.public_bytes(
+            serialization.Encoding.X962,
+            serialization.PublicFormat.UncompressedPoint
+        )
+        pub_b64 = base64.urlsafe_b64encode(raw_pub).decode("ascii").rstrip("=")
+        data = {"private_pem": priv, "public_key": pub_b64}
+        os.makedirs(os.path.dirname(VAPID_FILE), exist_ok=True)
+        with open(VAPID_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+        print("[TARS Web] Par de llaves VAPID autogenerado para WebPush.")
+        return data
+    except Exception as e:
+        print(f"[TARS Web] No se pudieron autogenerar llaves VAPID: {e}")
     return {}
 
 def send_web_push_all(title, body, url="/", tag="tars-msg-latest"):
