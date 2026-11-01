@@ -111,6 +111,7 @@ class MainActivity : AppCompatActivity() {
         private const val PREFS_NAME = "tars_app_config"
         private const val KEY_LOCAL_IP = "local_ip"
         private const val KEY_TS_DOMAIN = "ts_domain"
+        private const val KEY_LAST_WORKING_URL = "last_working_url"
         private const val TARS_MSG_NOTIFICATION_ID = 1001
     }
 
@@ -691,6 +692,10 @@ class MainActivity : AppCompatActivity() {
             }
 
             if (chosenUrl != null && chosenUrl.isNotBlank()) {
+                prefs.edit().putString(KEY_LAST_WORKING_URL, chosenUrl).apply()
+                try {
+                    TarsSyncService.startService(this@MainActivity)
+                } catch (e: Exception) {}
                 webView.loadUrl(chosenUrl)
                 // Watchdog: si después de 3.5s sigue el cartel de conectando, forzar escape
                 pageLoadWatchdogJob?.cancel()
