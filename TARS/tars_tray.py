@@ -267,6 +267,13 @@ class TarsTrayApp:
 
         self.menu.addSeparator()
 
+        # Acceso directo para vincular celular por QR
+        self.action_qr = QAction("Conectar Celular (Código QR)", self.menu)
+        self.action_qr.triggered.connect(self.show_qr_dialog)
+        self.menu.addAction(self.action_qr)
+
+        self.menu.addSeparator()
+
         # Submenú de Selección de Cerebro
         self.brain_menu = self.menu.addMenu("Cerebro de TARS")
         self.brain_group = QActionGroup(self.brain_menu)
@@ -287,6 +294,14 @@ class TarsTrayApp:
         self.menu.addAction(self.action_exit)
 
         self.tray.setContextMenu(self.menu)
+
+    def show_qr_dialog(self):
+        try:
+            from tars_qr_dialog import TarsQRDialog
+            dialog = TarsQRDialog()
+            dialog.exec_()
+        except Exception as e:
+            print(f"[TARS Tray] Error mostrando diálogo QR: {e}")
 
     def exit_app(self):
         try:

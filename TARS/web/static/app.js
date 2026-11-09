@@ -1462,6 +1462,8 @@ let serverLocalIp = '';
 let serverTailscaleIp = '';
 let serverLocalUrl = '';
 let serverTailscaleUrl = '';
+let serverQrLocal = '';
+let serverQrTailscale = '';
 
 function isConnectedViaLocalNetwork() {
     const host = window.location.hostname.toLowerCase();
@@ -1515,6 +1517,27 @@ function openLocalModeModal() {
     }
     if (remoteModeCardDesc && (serverTailscaleIp || serverTailscaleUrl)) {
         remoteModeCardDesc.innerText = `${serverTailscaleUrl ? serverTailscaleUrl.replace('https://', '') : serverTailscaleIp} • Acceso seguro remoto`;
+    }
+
+    // Actualizar vista del codigo QR segun la conexion activa
+    const qrImg = document.getElementById('connection-qr-img');
+    const qrLoading = document.getElementById('qr-loading-label');
+    const qrCaption = document.getElementById('qr-url-caption');
+    const activeQr = isLocal ? serverQrLocal : (serverQrTailscale || serverQrLocal);
+    const activeTargetUrl = isLocal ? serverLocalUrl : (serverTailscaleUrl || serverLocalUrl);
+
+    if (qrImg && qrLoading) {
+        if (activeQr) {
+            qrImg.src = activeQr;
+            qrImg.style.display = 'block';
+            qrLoading.style.display = 'none';
+            if (qrCaption) qrCaption.innerText = activeTargetUrl;
+        } else {
+            qrImg.style.display = 'none';
+            qrLoading.style.display = 'block';
+            qrLoading.innerText = isLocal ? 'QR para Red Local' : 'QR para Tailscale';
+            if (qrCaption) qrCaption.innerText = activeTargetUrl;
+        }
     }
 
     if (localModeDirectLinkContainer && localModeDirectLink) {
@@ -1623,6 +1646,8 @@ async function loadInitialConnectionMode() {
             if (serverLocalIp) localStorage.setItem('tars_local_ip', serverLocalIp);
             if (serverLocalUrl) localStorage.setItem('tars_local_url', serverLocalUrl);
             if (serverTailscaleUrl) localStorage.setItem('tars_tailscale_url', serverTailscaleUrl);
+            serverQrLocal = data.qr_local || '';
+            serverQrTailscale = data.qr_tailscale || '';
             updateConnectionModeUI();
         }
     } catch (e) {

@@ -1,3 +1,20 @@
+
+def generate_qr_data_url(data_str):
+    if not data_str:
+        return ""
+    try:
+        import qrcode, io, base64
+        qr = qrcode.QRCode(box_size=6, border=2)
+        qr.add_data(data_str)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="#0f172a", back_color="#ffffff")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+        return f"data:image/png;base64,{b64}"
+    except Exception as e:
+        print(f"[TARS Web] Error generando QR data URL: {e}")
+        return ""
 #!/usr/bin/env python3
 import re
 import os
@@ -3390,6 +3407,8 @@ async def handle_get_connection_mode(request):
         port = 8443
         local_url = f"https://{loc_ip}:{port}" if loc_ip else ""
         tailscale_url = f"https://{magic_dns}:{port}" if magic_dns else (f"https://{ts_ip}:{port}" if ts_ip else "")
+        qr_local = await asyncio.to_thread(generate_qr_data_url, local_url)
+        qr_tailscale = await asyncio.to_thread(generate_qr_data_url, tailscale_url)
         return web.json_response({
             "success": True,
             "local_mode": local_mode,
@@ -3397,7 +3416,9 @@ async def handle_get_connection_mode(request):
             "tailscale_ip": ts_ip,
             "tailscale_magicdns": magic_dns,
             "local_url": local_url,
-            "tailscale_url": tailscale_url
+            "tailscale_url": tailscale_url,
+            "qr_local": qr_local,
+            "qr_tailscale": qr_tailscale
         })
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
