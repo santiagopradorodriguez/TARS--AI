@@ -277,7 +277,62 @@ def on_press(key):
 
     trigger_single_action()
 
+
+def monitor_bluetooth_headsets():
+    import glob, select, evdev
+    while True:
+        try:
+            matched_devices = []
+            for ev_path in glob.glob("/dev/input/event*"):
+                try:
+                    dev = evdev.InputDevice(ev_path)
+                    name_lower = dev.name.lower()
+                    if "avrcp" in name_lower or "headset" in name_lower or "gd28" in name_lower:
+                        matched_devices.append(dev)
+                except Exception:
+                    continue
+
+            if not matched_devices:
+                time.sleep(3)
+                continue
+
+            dev_map = {d.fd: d for d in matched_devices}
+            while True:
+                r, _, _ = select.select(list(dev_map.keys()), [], [], 2.5)
+                # Verificar si cambio la lista de dispositivos
+                current_paths = set(glob.glob("/dev/input/event*"))
+                if set(d.path for d in matched_devices) != (current_paths & set(d.path for d in matched_devices)):
+                    break
+
+                for fd in r:
+                    dev = dev_map.get(fd)
+                    if not dev:
+                        continue
+                    try:
+                        for ev in dev.read():
+                            if ev.type == evdev.ecodes.EV_KEY and ev.value == 1:
+                                # Teclas tipicas de auricular bluetooth (Play, Pause, Voice Command, Hook, Next)
+                                key_name = evdev.ecodes.KEY.get(ev.code, "")
+                                if isinstance(key_name, list):
+                                    key_name = key_name[0]
+                                if any(k in key_name for k in ["PLAY", "PAUSE", "VOICE", "HOOK", "MEDIA", "MIC"]):
+                                    now = time.time()
+                                    with tap_lock:
+                                        tap_times.append(now)
+                                        while tap_times and now - tap_times[0] > 1.2:
+                                            tap_times.pop(0)
+                                        if len(tap_times) >= 3:
+                                            tap_times.clear()
+                                            trigger_killswitch()
+                                            continue
+                                    trigger_single_action()
+                    except Exception:
+                        break
+        except Exception:
+            time.sleep(3)
+
 def main():
+    threading.Thread(target=monitor_bluetooth_headsets, daemon=True).start()
     for lock in [DICTATING_LOCK, CHATGPT_DICTATING_LOCK, OPENCODE_DICTATING_LOCK]:
         if os.path.exists(lock):
             try:
