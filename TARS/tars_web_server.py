@@ -90,6 +90,12 @@ except Exception as _e:
     ControlLucesTuya = None
     AmigosHeladera = None
 
+try:
+    from tars_voice_bridge import PipeWireVoiceBridge
+except Exception as _e:
+    print(f"[TARS Web] Warning importando tars_voice_bridge: {_e}")
+    PipeWireVoiceBridge = None
+
 WEB_DIR = os.path.join(BASE_DIR, "web")
 STATIC_DIR = os.path.join(WEB_DIR, "static")
 MEDIA_DIR = os.path.join(WEB_DIR, "media")
@@ -4150,6 +4156,281 @@ async def handle_integraciones_heladera(request):
         res = heladera.listar_inventario()
     return web.json_response(res)
 
+def antigravity_voice_call_status():
+    """Consulta via CDP el estado actual de Voice Mode en Antigravity."""
+    js = """(() => {
+        const controls = document.querySelector('[data-testid="voice-call-controls"]');
+        const endBtn = document.querySelector('[data-testid="voice-call-end"], button[aria-label="End Voice mode"]');
+        const startBtn = document.querySelector('[data-testid="voice-start-button"], button[aria-label="Start Voice mode"]');
+        const muteBtn = document.querySelector('[data-testid="voice-mute-button"]');
+        const agentMuteBtn = document.querySelector('[data-testid="voice-call-agent-mute"]');
+        const timerEl = document.querySelector('[data-testid="voice-call-controls"] [role="timer"]');
+        const speakerEl = document.querySelector('[data-testid="live-turn-speaker"]');
+        const active = Boolean(controls || endBtn);
+        return {
+            active: active,
+            can_start: Boolean(startBtn && !startBtn.disabled),
+            mic_muted: muteBtn ? (muteBtn.getAttribute('aria-pressed') === 'true') : false,
+            agent_muted: agentMuteBtn ? (agentMuteBtn.getAttribute('aria-pressed') === 'true') : false,
+            timer: timerEl ? (timerEl.innerText || '').trim() : '',
+            speaker: speakerEl ? (speakerEl.getAttribute('data-speaker') || '') : ''
+        };
+    })()"""
+    res = eval_in_antigravity(js)
+    if not isinstance(res, dict):
+        return {
+            "ok": False,
+            "active": False,
+            "can_start": False,
+            "error": "No se encontro conexion CDP con Antigravity"
+        }
+    return {
+        "ok": True,
+        "active": bool(res.get("active", False)),
+        "can_start": bool(res.get("can_start", False)),
+        "mic_muted": bool(res.get("mic_muted", False)),
+        "agent_muted": bool(res.get("agent_muted", False)),
+        "timer": res.get("timer") or "",
+        "speaker": res.get("speaker") or ""
+    }
+
+def antigravity_voice_call_start():
+    """Inicia Voice Mode en Antigravity via CDP haciendo click en voice-start-button."""
+    status = antigravity_voice_call_status()
+    if not status.get("ok"):
+        return {"success": False, **status}
+    if status.get("active"):
+        return {"success": True, "already_active": True, **status}
+
+    js_click = """(() => {
+        const btn = document.querySelector('[data-testid="voice-start-button"], button[aria-label="Start Voice mode"]');
+        if (!btn) return 'NO_START_BTN';
+        if (btn.disabled) return 'START_BTN_DISABLED';
+        btn.click();
+        return 'CLICKED';
+    })()"""
+    click_res = eval_in_antigravity(js_click)
+    if click_res != "CLICKED":
+        return {
+            "success": False,
+            "ok": False,
+            "active": False,
+            "error": f"No se pudo iniciar Voice Mode ({click_res})"
+        }
+
+    for _ in range(10):
+        time.sleep(0.25)
+        status = antigravity_voice_call_status()
+        if status.get("active"):
+            return {"success": True, **status}
+
+    return {
+        "success": False,
+        "ok": status.get("ok", False),
+        "active": bool(status.get("active", False)),
+        "error": "Voice Mode no confirmo estado activo a tiempo"
+    }
+
+def antigravity_voice_call_stop():
+    """Detiene Voice Mode en Antigravity via CDP haciendo click en voice-call-end."""
+    status = antigravity_voice_call_status()
+    if not status.get("ok"):
+        return {"success": False, **status}
+    if not status.get("active"):
+        return {"success": True, "already_inactive": True, **status}
+
+    js_click = """(() => {
+        const endBtn = document.querySelector('[data-testid="voice-call-end"], button[aria-label="End Voice mode"]');
+        if (!endBtn) return 'NO_END_BTN';
+        if (endBtn.disabled) return 'END_BTN_DISABLED';
+        endBtn.click();
+        return 'CLICKED';
+    })()"""
+    click_res = eval_in_antigravity(js_click)
+    if click_res != "CLICKED":
+        return {
+            "success": False,
+            "ok": False,
+            "active": True,
+            "error": f"No se pudo detener Voice Mode ({click_res})"
+        }
+
+    for _ in range(10):
+        time.sleep(0.25)
+        status = antigravity_voice_call_status()
+        if status.get("ok") and not status.get("active"):
+            return {"success": True, **status}
+
+    return {
+        "success": False,
+        "ok": status.get("ok", False),
+        "active": bool(status.get("active", True)),
+        "error": "Voice Mode no confirmo cierre a tiempo"
+    }
+
+async def handle_voice_call_status(request):
+    try:
+        if is_remote_pc_active():
+            rem_ip = get_active_pc_ip()
+            rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/voice_call/status", "GET")
+            if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
+                return web.json_response(rem_res)
+        res = await asyncio.to_thread(antigravity_voice_call_status)
+        return web.json_response(res)
+    except Exception as e:
+        return web.json_response({"ok": False, "active": False, "error": str(e)}, status=500)
+
+async def handle_voice_call_start(request):
+    try:
+        if is_remote_pc_active():
+            rem_ip = get_active_pc_ip()
+            rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/voice_call/start", "POST", {})
+            if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
+                return web.json_response(rem_res)
+        res = await asyncio.to_thread(antigravity_voice_call_start)
+        return web.json_response(res)
+    except Exception as e:
+        return web.json_response({"success": False, "ok": False, "active": False, "error": str(e)}, status=500)
+
+async def handle_voice_call_stop(request):
+    try:
+        if is_remote_pc_active():
+            rem_ip = get_active_pc_ip()
+            rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/voice_call/stop", "POST", {})
+            if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
+                return web.json_response(rem_res)
+        res = await asyncio.to_thread(antigravity_voice_call_stop)
+        return web.json_response(res)
+    except Exception as e:
+        return web.json_response({"success": False, "ok": False, "active": False, "error": str(e)}, status=500)
+
+_voice_call_ws_lock = asyncio.Lock()
+_active_voice_call_ws = None
+
+
+async def handle_ws_voice_call(request):
+    global _active_voice_call_ws
+    if PipeWireVoiceBridge is None:
+        return web.json_response(
+            {"ok": False, "error": "PipeWireVoiceBridge no disponible"},
+            status=503,
+        )
+
+    ws = web.WebSocketResponse(heartbeat=20.0)
+    await ws.prepare(request)
+    print("[TARS VoiceCall] Cliente WebSocket conectado en /ws/voice_call")
+
+    prev_ws = _active_voice_call_ws
+    if prev_ws is not None and not prev_ws.closed:
+        print("[TARS VoiceCall] Cerrando sesion WebSocket previa antes de iniciar nueva llamada")
+        try:
+            await prev_ws.close(code=1000, message=b"Replaced by new call")
+        except Exception:
+            pass
+
+    async with _voice_call_ws_lock:
+        _active_voice_call_ws = ws
+        bridge = PipeWireVoiceBridge()
+        speaker_task = None
+        mic_task = None
+        reroute_task = None
+        voice_started = False
+
+        async def _forward_speaker_to_ws():
+            stream = bridge.iter_speaker_stream()
+            try:
+                async for chunk in stream:
+                    if not chunk:
+                        continue
+                    if ws.closed:
+                        break
+                    await ws.send_bytes(chunk)
+            finally:
+                await stream.aclose()
+
+        async def _forward_ws_to_mic():
+            async for msg in ws:
+                if msg.type == web.WSMsgType.BINARY:
+                    if msg.data:
+                        await asyncio.to_thread(bridge.write_mic_chunk, msg.data)
+                elif msg.type == web.WSMsgType.TEXT:
+                    try:
+                        payload = json.loads(msg.data)
+                    except Exception:
+                        payload = None
+                    if isinstance(payload, dict) and payload.get("type") in ("stop", "hangup"):
+                        break
+                elif msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
+                    break
+
+        async def _delayed_reroute():
+            await asyncio.sleep(1.0)
+            if not bridge.is_active:
+                return
+            res_retry = await asyncio.to_thread(bridge.route_antigravity_audio)
+            print(f"[TARS VoiceCall] Re-intento de enrutamiento de audio (+1s): {res_retry}")
+
+        try:
+            setup_info = await asyncio.to_thread(bridge.setup)
+            print(f"[TARS VoiceCall] Puente PipeWire listo: {setup_info}")
+
+            start_res = await asyncio.to_thread(antigravity_voice_call_start)
+            voice_started = True
+            print(f"[TARS VoiceCall] Voice Mode start: {start_res}")
+
+            route_res = await asyncio.to_thread(bridge.route_antigravity_audio)
+            print(f"[TARS VoiceCall] Enrutamiento inicial de audio: {route_res}")
+            if not route_res.get("moved_sink_inputs") or not route_res.get("moved_source_outputs"):
+                reroute_task = asyncio.create_task(_delayed_reroute())
+
+            speaker_task = asyncio.create_task(_forward_speaker_to_ws())
+            mic_task = asyncio.create_task(_forward_ws_to_mic())
+
+            done, _ = await asyncio.wait(
+                [mic_task, speaker_task],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                exc = task.exception()
+                if exc is not None and not isinstance(exc, asyncio.CancelledError):
+                    print(f"[TARS VoiceCall] Tarea finalizada con error: {exc}")
+        except asyncio.CancelledError:
+            print("[TARS VoiceCall] Conexion WebSocket cancelada")
+            raise
+        except Exception as exc:
+            print(f"[TARS VoiceCall] Error en sesion de llamada: {exc}")
+        finally:
+            for task in (reroute_task, speaker_task, mic_task):
+                if task is not None and not task.done():
+                    task.cancel()
+            pending_tasks = [t for t in (reroute_task, speaker_task, mic_task) if t is not None]
+            if pending_tasks:
+                await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+            if not ws.closed:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+
+            if voice_started:
+                try:
+                    stop_res = await asyncio.to_thread(antigravity_voice_call_stop)
+                    print(f"[TARS VoiceCall] Voice Mode stop: {stop_res}")
+                except Exception as exc:
+                    print(f"[TARS VoiceCall] Error deteniendo Voice Mode: {exc}")
+
+            try:
+                await asyncio.to_thread(bridge.teardown)
+                print("[TARS VoiceCall] Puente PipeWire desmontado limpiamente")
+            except Exception as exc:
+                print(f"[TARS VoiceCall] Error en bridge.teardown(): {exc}")
+
+            if _active_voice_call_ws is ws:
+                _active_voice_call_ws = None
+
+    return ws
+
 def init_app():
     @web.middleware
     async def cors_middleware(request, handler):
@@ -4204,6 +4485,10 @@ def init_app():
     app.router.add_post("/api/integraciones/luces", handle_integraciones_luces)
     app.router.add_get("/api/integraciones/heladera", handle_integraciones_heladera)
     app.router.add_post("/api/integraciones/heladera", handle_integraciones_heladera)
+    app.router.add_get("/api/voice_call/status", handle_voice_call_status)
+    app.router.add_post("/api/voice_call/start", handle_voice_call_start)
+    app.router.add_post("/api/voice_call/stop", handle_voice_call_stop)
+    app.router.add_get("/ws/voice_call", handle_ws_voice_call)
     app.router.add_static("/static/", STATIC_DIR)
     app.router.add_static("/media/", MEDIA_DIR)
     return app

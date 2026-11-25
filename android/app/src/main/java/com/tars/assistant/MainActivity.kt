@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -74,6 +75,7 @@ class MainActivity : AppCompatActivity() {
     private var recognitionIntent: Intent? = null
     private var isWakeWordListening = false
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var callWakeLock: PowerManager.WakeLock? = null
 
     private val activityScope = CoroutineScope(Dispatchers.Main + Job())
     private val RECORD_AUDIO_PERMISSION_CODE = 101
@@ -503,6 +505,46 @@ class MainActivity : AppCompatActivity() {
                 openExternalIntent(url)
             }
         }
+
+        @JavascriptInterface
+        fun acquireCallWakeLock() {
+            runOnUiThread {
+                acquireCallWakeLockInternal()
+            }
+        }
+
+        @JavascriptInterface
+        fun releaseCallWakeLock() {
+            runOnUiThread {
+                releaseCallWakeLockInternal()
+            }
+        }
+    }
+
+    @SuppressLint("WakelockTimeout")
+    private fun acquireCallWakeLockInternal() {
+        try {
+            if (callWakeLock == null) {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                callWakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "TARS::VoiceCallWakeLock"
+                ).apply {
+                    setReferenceCounted(false)
+                }
+            }
+            if (callWakeLock?.isHeld == false) {
+                callWakeLock?.acquire()
+            }
+        } catch (e: Exception) {}
+    }
+
+    private fun releaseCallWakeLockInternal() {
+        try {
+            if (callWakeLock?.isHeld == true) {
+                callWakeLock?.release()
+            }
+        } catch (e: Exception) {}
     }
 
     private fun initNativeSpeechRecognizer() {
@@ -971,6 +1013,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        releaseCallWakeLockInternal()
         stopNativeWakeWord()
         try {
             speechRecognizer?.destroy()

@@ -2957,4 +2957,535 @@ document.addEventListener('click', (e) => {
     }
 }, true);
 
+// =========================================================================
+// MODO LLAMADA DE VOZ EN TIEMPO REAL (WebSocket /ws/voice_call)
+// =========================================================================
+class VoiceCallClient {
+    constructor(elements) {
+        this.els = elements || {};
+        this.targetSampleRate = 16000;
+        this.ws = null;
+        this.audioCtx = null;
+        this.micStream = null;
+        this.mediaSource = null;
+        this.captureNode = null;
+        this.captureGain = null;
+        this.workletUrl = null;
+        this.activePlaybackSources = new Set();
+        this.nextPlayTime = 0;
+        this.isMuted = false;
+        this.isCalling = false;
+        this.isTearingDown = false;
+        this.timerInterval = null;
+        this.callStartedAt = 0;
+        this.state = 'idle';
+    }
+
+    buildWebSocketUrl() {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${proto}//${window.location.host}/ws/voice_call`;
+    }
+
+    setState(state, subtitleText = '') {
+        this.state = state;
+        const { statusPill, statusText, avatar, subtitle } = this.els;
+
+        if (statusPill) {
+            statusPill.classList.remove('connecting', 'active', 'muted', 'error');
+            if (state === 'connecting' || state === 'active' || state === 'muted' || state === 'error') {
+                statusPill.classList.add(state);
+            }
+        }
+        if (avatar) {
+            avatar.classList.remove('connecting', 'active', 'muted', 'error');
+            if (state === 'connecting' || state === 'active' || state === 'muted' || state === 'error') {
+                avatar.classList.add(state);
+            }
+        }
+        if (statusText) {
+            if (state === 'connecting') statusText.innerText = 'Conectando';
+            else if (state === 'active') statusText.innerText = 'En llamada';
+            else if (state === 'muted') statusText.innerText = 'Silenciado';
+            else if (state === 'error') statusText.innerText = 'Error';
+            else statusText.innerText = 'Finalizada';
+        }
+        if (subtitle && subtitleText) {
+            subtitle.innerText = subtitleText;
+        }
+    }
+
+    updateMuteUI() {
+        const { muteBtn, micOnIcon, micOffIcon, muteLabel } = this.els;
+        if (muteBtn) {
+            muteBtn.classList.toggle('is-muted', this.isMuted);
+            muteBtn.title = this.isMuted ? 'Activar microfono' : 'Silenciar microfono';
+            muteBtn.setAttribute('aria-label', this.isMuted ? 'Activar microfono' : 'Silenciar microfono');
+        }
+        if (micOnIcon) micOnIcon.style.display = this.isMuted ? 'none' : 'inline';
+        if (micOffIcon) micOffIcon.style.display = this.isMuted ? 'inline' : 'none';
+        if (muteLabel) muteLabel.innerText = this.isMuted ? 'Activar microfono' : 'Silenciar microfono';
+
+        if (this.isCalling && this.ws && this.ws.readyState === WebSocket.OPEN) {
+            if (this.isMuted) {
+                this.setState('muted', 'Microfono silenciado');
+            } else {
+                this.setState('active', 'Audio bidireccional activo');
+            }
+        }
+    }
+
+    formatDuration(totalSeconds) {
+        const mins = Math.floor(totalSeconds / 60);
+        const secs = totalSeconds % 60;
+        return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+
+    startTimer() {
+        this.stopTimer();
+        this.callStartedAt = Date.now();
+        if (this.els.timer) {
+            this.els.timer.innerText = '00:00';
+        }
+        this.timerInterval = setInterval(() => {
+            if (!this.els.timer) return;
+            const elapsed = Math.max(0, Math.floor((Date.now() - this.callStartedAt) / 1000));
+            this.els.timer.innerText = this.formatDuration(elapsed);
+        }, 500);
+    }
+
+    stopTimer() {
+        if (this.timerInterval) {
+            clearInterval(this.timerInterval);
+            this.timerInterval = null;
+        }
+    }
+
+    showOverlay() {
+        if (this.els.overlay) {
+            this.els.overlay.classList.remove('hidden');
+        }
+    }
+
+    hideOverlay() {
+        if (this.els.overlay) {
+            this.els.overlay.classList.add('hidden');
+        }
+    }
+
+    async acquireMicrophone() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            throw new Error('El navegador no soporta captura de audio (requiere HTTPS).');
+        }
+        const preferredConstraints = {
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                sampleRate: this.targetSampleRate
+            }
+        };
+        try {
+            return await navigator.mediaDevices.getUserMedia(preferredConstraints);
+        } catch (err) {
+            if (err && (err.name === 'OverconstrainedError' || err.name === 'NotSupportedError')) {
+                return await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+            }
+            throw err;
+        }
+    }
+
+    float32ToPcmInt16Buffer(inputData, inputSampleRate) {
+        let samples = inputData;
+        if (inputSampleRate && inputSampleRate !== this.targetSampleRate) {
+            const ratio = inputSampleRate / this.targetSampleRate;
+            const outLength = Math.max(1, Math.floor(inputData.length / ratio));
+            const resampled = new Float32Array(outLength);
+            for (let i = 0; i < outLength; i++) {
+                const srcPos = i * ratio;
+                const idx0 = Math.floor(srcPos);
+                const idx1 = Math.min(idx0 + 1, inputData.length - 1);
+                const frac = srcPos - idx0;
+                resampled[i] = inputData[idx0] + (inputData[idx1] - inputData[idx0]) * frac;
+            }
+            samples = resampled;
+        }
+
+        const pcmBuffer = new ArrayBuffer(samples.length * 2);
+        const view = new DataView(pcmBuffer);
+        for (let i = 0; i < samples.length; i++) {
+            const clamped = Math.max(-1, Math.min(1, samples[i]));
+            const intVal = clamped < 0 ? clamped * 0x8000 : clamped * 0x7FFF;
+            view.setInt16(i * 2, intVal, true);
+        }
+        return pcmBuffer;
+    }
+
+    sendMicSamples(float32Chunk) {
+        if (!this.isCalling || this.isMuted || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        if (!float32Chunk || float32Chunk.length === 0) return;
+        const rate = this.audioCtx ? this.audioCtx.sampleRate : this.targetSampleRate;
+        const pcmBuffer = this.float32ToPcmInt16Buffer(float32Chunk, rate);
+        try {
+            this.ws.send(pcmBuffer);
+        } catch (err) {
+            console.warn('[VoiceCall] Error enviando chunk PCM:', err);
+        }
+    }
+
+    async setupCapturePipeline() {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) {
+            throw new Error('AudioContext no disponible en este navegador.');
+        }
+
+        try {
+            this.audioCtx = new AudioContextClass({ sampleRate: this.targetSampleRate });
+        } catch (e) {
+            this.audioCtx = new AudioContextClass();
+        }
+
+        if (this.audioCtx.state === 'suspended') {
+            await this.audioCtx.resume();
+        }
+
+        this.nextPlayTime = this.audioCtx.currentTime + 0.04;
+        this.mediaSource = this.audioCtx.createMediaStreamSource(this.micStream);
+        this.captureGain = this.audioCtx.createGain();
+        this.captureGain.gain.value = 0;
+        this.captureGain.connect(this.audioCtx.destination);
+
+        if (this.audioCtx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+            try {
+                const processorCode = `
+                    class VoiceCallPcmProcessor extends AudioWorkletProcessor {
+                        constructor() {
+                            super();
+                            this._buffer = [];
+                            this._chunkSize = 1024;
+                        }
+                        process(inputs) {
+                            const input = inputs[0];
+                            if (input && input[0] && input[0].length > 0) {
+                                const channel = input[0];
+                                for (let i = 0; i < channel.length; i++) {
+                                    this._buffer.push(channel[i]);
+                                }
+                                if (this._buffer.length >= this._chunkSize) {
+                                    const out = new Float32Array(this._buffer);
+                                    this._buffer = [];
+                                    this.port.postMessage(out, [out.buffer]);
+                                }
+                            }
+                            return true;
+                        }
+                    }
+                    registerProcessor('voice-call-pcm-processor', VoiceCallPcmProcessor);
+                `;
+                const blob = new Blob([processorCode], { type: 'application/javascript' });
+                this.workletUrl = URL.createObjectURL(blob);
+                await this.audioCtx.audioWorklet.addModule(this.workletUrl);
+
+                const workletNode = new AudioWorkletNode(this.audioCtx, 'voice-call-pcm-processor');
+                workletNode.port.onmessage = (event) => {
+                    if (event.data) {
+                        this.sendMicSamples(event.data);
+                    }
+                };
+                this.mediaSource.connect(workletNode);
+                workletNode.connect(this.captureGain);
+                this.captureNode = workletNode;
+                return;
+            } catch (workletErr) {
+                console.warn('[VoiceCall] AudioWorklet no disponible, usando ScriptProcessorNode:', workletErr);
+                if (this.workletUrl) {
+                    try { URL.revokeObjectURL(this.workletUrl); } catch (e) {}
+                    this.workletUrl = null;
+                }
+            }
+        }
+
+        // Fallback compatible con navegadores/WebViews sin AudioWorklet
+        const scriptNode = this.audioCtx.createScriptProcessor(2048, 1, 1);
+        scriptNode.onaudioprocess = (event) => {
+            const inputBuffer = event.inputBuffer;
+            if (inputBuffer && inputBuffer.numberOfChannels > 0) {
+                this.sendMicSamples(inputBuffer.getChannelData(0));
+            }
+        };
+        this.mediaSource.connect(scriptNode);
+        scriptNode.connect(this.captureGain);
+        this.captureNode = scriptNode;
+    }
+
+    enqueuePcmPlayback(arrayBuffer) {
+        if (!this.audioCtx || !arrayBuffer || arrayBuffer.byteLength < 2) return;
+        if (this.audioCtx.state === 'suspended') {
+            this.audioCtx.resume().catch(() => {});
+        }
+
+        const sampleCount = Math.floor(arrayBuffer.byteLength / 2);
+        if (sampleCount <= 0) return;
+
+        const view = new DataView(arrayBuffer);
+        const float32 = new Float32Array(sampleCount);
+        for (let i = 0; i < sampleCount; i++) {
+            float32[i] = view.getInt16(i * 2, true) / 32768.0;
+        }
+
+        const audioBuffer = this.audioCtx.createBuffer(1, sampleCount, this.targetSampleRate);
+        audioBuffer.getChannelData(0).set(float32);
+
+        const source = this.audioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(this.audioCtx.destination);
+
+        const now = this.audioCtx.currentTime;
+        if (this.nextPlayTime < now + 0.015) {
+            this.nextPlayTime = now + 0.03;
+        } else if (this.nextPlayTime - now > 0.75) {
+            this.nextPlayTime = now + 0.05;
+        }
+
+        source.start(this.nextPlayTime);
+        this.nextPlayTime += audioBuffer.duration;
+
+        this.activePlaybackSources.add(source);
+        source.onended = () => {
+            this.activePlaybackSources.delete(source);
+        };
+    }
+
+    stopAllPlayback() {
+        this.activePlaybackSources.forEach((src) => {
+            try { src.stop(); } catch (e) {}
+            try { src.disconnect(); } catch (e) {}
+        });
+        this.activePlaybackSources.clear();
+        this.nextPlayTime = 0;
+    }
+
+    async startCall() {
+        if (this.isCalling) return;
+        this.isCalling = true;
+        this.isTearingDown = false;
+        this.isMuted = false;
+
+        if (typeof stopCurrentAudio === 'function') stopCurrentAudio();
+        if (typeof stopWakeWordListening === 'function') stopWakeWordListening();
+        if (typeof isRecording !== 'undefined' && isRecording && typeof stopRecording === 'function') {
+            stopRecording();
+        }
+
+        if (typeof acquireWakeLock === 'function') acquireWakeLock(true);
+        if (window.AndroidBridge && typeof window.AndroidBridge.acquireCallWakeLock === 'function') {
+            try { window.AndroidBridge.acquireCallWakeLock(); } catch (e) {}
+        }
+
+        if (this.els.timer) this.els.timer.innerText = '00:00';
+        this.updateMuteUI();
+        this.setState('connecting', 'Solicitando acceso al microfono...');
+        this.showOverlay();
+
+        try {
+            this.micStream = await this.acquireMicrophone();
+            if (!this.isCalling) {
+                this.cleanupResources();
+                return;
+            }
+
+            this.setState('connecting', 'Conectando con Antigravity...');
+            await this.setupCapturePipeline();
+            if (!this.isCalling) {
+                this.cleanupResources();
+                return;
+            }
+
+            const wsUrl = this.buildWebSocketUrl();
+            const ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer';
+            this.ws = ws;
+
+            ws.onopen = () => {
+                if (!this.isCalling) {
+                    try { ws.close(1000, 'Cancelled'); } catch (e) {}
+                    return;
+                }
+                this.startTimer();
+                if (this.isMuted) {
+                    this.setState('muted', 'Microfono silenciado');
+                } else {
+                    this.setState('active', 'Audio bidireccional activo');
+                }
+            };
+
+            ws.onmessage = async (event) => {
+                if (!this.isCalling) return;
+                if (event.data instanceof ArrayBuffer) {
+                    this.enqueuePcmPlayback(event.data);
+                } else if (typeof Blob !== 'undefined' && event.data instanceof Blob) {
+                    try {
+                        const buf = await event.data.arrayBuffer();
+                        this.enqueuePcmPlayback(buf);
+                    } catch (e) {}
+                } else if (typeof event.data === 'string') {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        if (msg && msg.error) {
+                            this.setState('error', msg.error);
+                        } else if (msg && msg.message && this.els.subtitle) {
+                            this.els.subtitle.innerText = msg.message;
+                        }
+                    } catch (e) {}
+                }
+            };
+
+            ws.onerror = () => {
+                if (this.isCalling && this.state === 'connecting') {
+                    this.setState('error', 'No se pudo conectar con el servidor de llamada.');
+                }
+            };
+
+            ws.onclose = () => {
+                if (this.isCalling && !this.isTearingDown) {
+                    this.hangup();
+                }
+            };
+        } catch (err) {
+            console.error('[VoiceCall] Error iniciando llamada:', err);
+            const errMsg = (err && err.message) ? err.message : 'No se pudo iniciar la llamada.';
+            this.setState('error', errMsg);
+            setTimeout(() => {
+                if (this.isCalling && this.state === 'error') {
+                    this.hangup();
+                }
+            }, 2200);
+        }
+    }
+
+    toggleMute() {
+        if (!this.isCalling) return;
+        this.isMuted = !this.isMuted;
+        if (this.micStream) {
+            this.micStream.getAudioTracks().forEach((track) => {
+                track.enabled = !this.isMuted;
+            });
+        }
+        this.updateMuteUI();
+    }
+
+    cleanupResources() {
+        this.stopTimer();
+        this.stopAllPlayback();
+
+        if (this.captureNode) {
+            try { this.captureNode.disconnect(); } catch (e) {}
+            if ('onaudioprocess' in this.captureNode) {
+                this.captureNode.onaudioprocess = null;
+            }
+            this.captureNode = null;
+        }
+        if (this.mediaSource) {
+            try { this.mediaSource.disconnect(); } catch (e) {}
+            this.mediaSource = null;
+        }
+        if (this.captureGain) {
+            try { this.captureGain.disconnect(); } catch (e) {}
+            this.captureGain = null;
+        }
+        if (this.workletUrl) {
+            try { URL.revokeObjectURL(this.workletUrl); } catch (e) {}
+            this.workletUrl = null;
+        }
+        if (this.micStream) {
+            this.micStream.getTracks().forEach((track) => {
+                try { track.stop(); } catch (e) {}
+            });
+            this.micStream = null;
+        }
+        if (this.audioCtx) {
+            try {
+                if (this.audioCtx.state !== 'closed') {
+                    this.audioCtx.close().catch(() => {});
+                }
+            } catch (e) {}
+            this.audioCtx = null;
+        }
+    }
+
+    hangup() {
+        if (this.isTearingDown) return;
+        this.isTearingDown = true;
+        this.isCalling = false;
+        this.isMuted = false;
+
+        if (this.ws) {
+            const socket = this.ws;
+            this.ws = null;
+            try {
+                if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+                    socket.close(1000, 'Call ended by user');
+                }
+            } catch (e) {}
+        }
+
+        this.cleanupResources();
+        this.updateMuteUI();
+        this.hideOverlay();
+        this.setState('idle', '');
+
+        if (typeof acquireWakeLock === 'function') acquireWakeLock(false);
+        if (window.AndroidBridge && typeof window.AndroidBridge.releaseCallWakeLock === 'function') {
+            try { window.AndroidBridge.releaseCallWakeLock(); } catch (e) {}
+        }
+        if (typeof scheduleWakeWordRestart === 'function') {
+            scheduleWakeWordRestart(1000);
+        }
+        this.isTearingDown = false;
+    }
+}
+
+const voiceCallOpenBtn = document.getElementById('voice-call-open-btn');
+const voiceCallOverlay = document.getElementById('voice-call-overlay');
+const voiceCallMuteBtn = document.getElementById('voice-call-mute-btn');
+const voiceCallHangupBtn = document.getElementById('voice-call-hangup-btn');
+
+const voiceCallClient = new VoiceCallClient({
+    overlay: voiceCallOverlay,
+    statusPill: document.getElementById('voice-call-status-pill'),
+    statusText: document.getElementById('voice-call-status-text'),
+    avatar: document.getElementById('voice-call-avatar'),
+    timer: document.getElementById('voice-call-timer'),
+    subtitle: document.getElementById('voice-call-subtitle'),
+    muteBtn: voiceCallMuteBtn,
+    micOnIcon: document.getElementById('voice-call-mic-on-icon'),
+    micOffIcon: document.getElementById('voice-call-mic-off-icon'),
+    muteLabel: document.getElementById('voice-call-mute-label')
+});
+window.voiceCallClient = voiceCallClient;
+
+if (voiceCallOpenBtn) {
+    voiceCallOpenBtn.addEventListener('click', () => {
+        voiceCallClient.startCall();
+    });
+}
+if (voiceCallMuteBtn) {
+    voiceCallMuteBtn.addEventListener('click', () => {
+        voiceCallClient.toggleMute();
+    });
+}
+if (voiceCallHangupBtn) {
+    voiceCallHangupBtn.addEventListener('click', () => {
+        voiceCallClient.hangup();
+    });
+}
+
+
 
