@@ -4156,6 +4156,29 @@ async def handle_integraciones_heladera(request):
         res = heladera.listar_inventario()
     return web.json_response(res)
 
+def _find_antigravity_voice_ws_url():
+    """Busca entre todos los targets CDP de Antigravity el que tenga el boton o controles de Voice Mode."""
+    targets = get_all_devtools_page_targets()
+    fallback_url = None
+    js_probe = """(() => {
+        const active = Boolean(document.querySelector('[data-testid="voice-call-controls"], [data-testid="voice-call-end"], button[aria-label="End Voice mode"]'));
+        const startBtn = document.querySelector('[data-testid="voice-start-button"], button[aria-label="Start Voice mode"]');
+        return { active: active, can_start: Boolean(startBtn && !startBtn.disabled), has_start: Boolean(startBtn) };
+    })()"""
+    for t in targets:
+        title = t.get("title", "")
+        url = t.get("url", "")
+        ws_url = t.get("webSocketDebuggerUrl")
+        if not ws_url:
+            continue
+        if "Antigravity" in title or "127.0.0.1" in url:
+            if not fallback_url:
+                fallback_url = ws_url
+            res = eval_in_antigravity(js_probe, ws_url=ws_url)
+            if isinstance(res, dict) and (res.get("active") or res.get("has_start")):
+                return ws_url
+    return fallback_url or get_devtools_ws_url()
+
 def antigravity_voice_call_status():
     """Consulta via CDP el estado actual de Voice Mode en Antigravity."""
     js = """(() => {
@@ -4176,7 +4199,8 @@ def antigravity_voice_call_status():
             speaker: speakerEl ? (speakerEl.getAttribute('data-speaker') || '') : ''
         };
     })()"""
-    res = eval_in_antigravity(js)
+    ws_url = _find_antigravity_voice_ws_url()
+    res = eval_in_antigravity(js, ws_url=ws_url)
     if not isinstance(res, dict):
         return {
             "ok": False,
@@ -4209,7 +4233,8 @@ def antigravity_voice_call_start():
         btn.click();
         return 'CLICKED';
     })()"""
-    click_res = eval_in_antigravity(js_click)
+    ws_url = _find_antigravity_voice_ws_url()
+    click_res = eval_in_antigravity(js_click, ws_url=ws_url)
     if click_res != "CLICKED":
         return {
             "success": False,
@@ -4246,7 +4271,8 @@ def antigravity_voice_call_stop():
         endBtn.click();
         return 'CLICKED';
     })()"""
-    click_res = eval_in_antigravity(js_click)
+    ws_url = _find_antigravity_voice_ws_url()
+    click_res = eval_in_antigravity(js_click, ws_url=ws_url)
     if click_res != "CLICKED":
         return {
             "success": False,
