@@ -19,11 +19,12 @@ android {
 
     signingConfigs {
         release {
-            storeFile file("../tars.keystore")
-            storePassword "tars123456"
-            keyAlias "tars"
-            keyPassword "tars123456"
-            enableV1Signing true
+            def ksPath = System.getenv("TARS_KEYSTORE_PATH") ?: "../tars.keystore"
+            storeFile file(ksPath)
+            storePassword System.getenv("TARS_KEYSTORE_PASSWORD") ?: ""
+            keyAlias System.getenv("TARS_KEY_ALIAS") ?: "tars"
+            keyPassword System.getenv("TARS_KEY_PASSWORD") ?: ""
+            enableV1Signing false
             enableV2Signing true
             enableV3Signing true
             enableV4Signing false
@@ -32,7 +33,8 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled true
+            shrinkResources true
             signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }

@@ -13,12 +13,14 @@ CANCEL_TONE = "/home/santiago/.gemini/config/tars_cancel_tone.wav"
 RECORD_START_TONE = "/home/santiago/.gemini/config/tars_record_start.wav"
 RECORD_END_TONE = "/home/santiago/.gemini/config/tars_record_end.wav"
 CHIME_FILE = "/home/santiago/.gemini/config/gemini_chime.wav"
-DICTATING_LOCK = "/tmp/tars_dictating.lock"
-CHATGPT_DICTATING_LOCK = "/tmp/chatgpt_dictating.lock"
-OPENCODE_DICTATING_LOCK = "/tmp/opencode_dictating.lock"
-SPEAKING_LOCK = "/tmp/tars_speaking.lock"
-CHATGPT_VOICE_WAV = "/tmp/chatgpt_voice.wav"
-OPENCODE_VOICE_WAV = "/tmp/opencode_voice.wav"
+from tars_rutas import ruta_runtime
+
+DICTATING_LOCK = ruta_runtime("tars_dictating.lock")
+CHATGPT_DICTATING_LOCK = ruta_runtime("chatgpt_dictating.lock")
+OPENCODE_DICTATING_LOCK = ruta_runtime("opencode_dictating.lock")
+SPEAKING_LOCK = ruta_runtime("tars_speaking.lock")
+CHATGPT_VOICE_WAV = ruta_runtime("chatgpt_voice.wav")
+OPENCODE_VOICE_WAV = ruta_runtime("opencode_voice.wav")
 PYTHON_WHISPER = "/home/santiago/repositorios/CosmicGenerator/venv/bin/python3"
 
 tap_times = []
@@ -59,7 +61,7 @@ def set_mode(mode):
     elif mode == "off":
         msg = "Modo: Rojo - Silencio Total"
     
-    os.system(f'notify-send "TARS" "{msg}" -t 2000')
+    subprocess.run(["notify-send", "TARS", msg, "-t", "2000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 
 def is_target_key(key):
     vk = getattr(key, 'vk', None)
@@ -174,14 +176,14 @@ def process_chatgpt_transcription(wav_path=None):
 import whisper, sys
 try:
     model = whisper.load_model("tiny")
-    res = model.transcribe("%s", language="es", fp16=False)
+    res = model.transcribe(sys.argv[1], language="es", fp16=False)
     text = res.get("text", "").strip()
     if text:
         sys.stdout.write(text)
 except Exception:
     pass
-""" % wav
-        out = subprocess.check_output([PYTHON_WHISPER, "-c", script], text=True).strip()
+"""
+        out = subprocess.check_output([PYTHON_WHISPER, "-c", script, wav], text=True).strip()
         if out:
             controller = keyboard.Controller()
             time.sleep(0.05)

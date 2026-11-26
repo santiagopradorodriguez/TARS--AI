@@ -19,6 +19,7 @@ import os
 import re
 import socket
 import sys
+import tempfile
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -45,6 +46,28 @@ def directorio_config_tars() -> str:
     if os.path.isdir(legacy):
         return legacy
     return nuevo
+
+
+def directorio_runtime_tars() -> str:
+    """Directorio runtime privado del usuario (0700) en XDG_RUNTIME_DIR para locks y audios temporales."""
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    if base and os.path.isdir(base):
+        ruta = os.path.join(base, "tars")
+    else:
+        uid = os.getuid() if hasattr(os, "getuid") else 0
+        ruta = os.path.join(tempfile.gettempdir(), f"tars_runtime_{uid}")
+    os.makedirs(ruta, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(ruta, 0o700)
+    except OSError:
+        pass
+    return ruta
+
+
+def ruta_runtime(nombre: str) -> str:
+    """Ruta segura dentro del directorio runtime privado del usuario."""
+    limpio = os.path.basename(nombre)
+    return os.path.join(directorio_runtime_tars(), limpio)
 
 
 def ruta_estado() -> str:

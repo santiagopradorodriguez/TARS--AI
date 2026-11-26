@@ -15,7 +15,8 @@ COOLDOWN_SECONDS = 30  # 30 segundos de silencio para la misma persona
 def announce_sender(sender_name):
     # Generar el audio
     text = f"Mensaje de {sender_name}"
-    audio_file = "/tmp/wa_msg.mp3"
+    from tars_rutas import ruta_runtime
+    audio_file = ruta_runtime("wa_msg.mp3")
     
     try:
         subprocess.run([EDGE_TTS, "--text", text, "--voice", "es-AR-TomasNeural", "--rate", "-5%", "--write-media", audio_file], 

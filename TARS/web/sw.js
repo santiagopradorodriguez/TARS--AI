@@ -29,7 +29,7 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
     // No interceptar llamadas a APIs ni WebSockets para evitar romper la sincronizacion
-    if (event.request.url.includes('/api/') || event.request.url.includes('/ws')) {
+    if (event.request.url.includes('/api/') || event.request.url.includes('/ws') || event.request.url.includes('/media/')) {
         return;
     }
     if (event.request.method === 'GET') {
@@ -102,7 +102,8 @@ self.addEventListener('push', (event) => {
 });
 
 self.addEventListener('notificationclick', (event) => {
-    const targetUrl = (event.notification.data && event.notification.data.url) || '/';
+    const rawTargetUrl = (event.notification.data && event.notification.data.url) || '/';
+    const targetUrl = (typeof rawTargetUrl === 'string' && rawTargetUrl.startsWith('/') && !rawTargetUrl.startsWith('//')) ? rawTargetUrl : '/';
 
     if (event.action === 'unsubscribe') {
         event.notification.close();

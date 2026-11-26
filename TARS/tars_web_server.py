@@ -73,6 +73,13 @@ except Exception as _e:
     print(f"[TARS Web] Warning aplicando patch edge_tts: {_e}")
 import vosk
 
+import hmac
+import ipaddress
+import secrets
+import tempfile
+from pathlib import Path
+from urllib.parse import quote as _url_quote
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
@@ -120,6 +127,115 @@ VOSK_MODEL_PATH = os.environ.get("VOSK_MODEL_PATH") or next((p for p in VOSK_CAN
 TTS_VOICE = os.environ.get("TARS_VOICE", "es-AR-ElenaNeural")
 
 os.makedirs(MEDIA_DIR, exist_ok=True)
+
+# --- Seguridad: token Bearer persistente, SSL verificado y validacion de rutas/hosts ---
+AUTH_TOKEN_FILE = os.path.join(DEFAULT_CONFIG_DIR, "tars_auth_token")
+MAX_UPLOAD_BYTES = int(os.environ.get("TARS_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+_CACHED_AUTH_TOKEN = None
+
+
+def _write_secret_file(filepath, content):
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    fd = os.open(filepath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+    try:
+        os.chmod(filepath, 0o600)
+    except OSError:
+        pass
+
+
+def get_auth_token():
+    global _CACHED_AUTH_TOKEN
+    if _CACHED_AUTH_TOKEN:
+        return _CACHED_AUTH_TOKEN
+    env_tok = os.environ.get("TARS_AUTH_TOKEN", "").strip()
+    if env_tok:
+        _CACHED_AUTH_TOKEN = env_tok
+        return _CACHED_AUTH_TOKEN
+    if os.path.exists(AUTH_TOKEN_FILE):
+        try:
+            with open(AUTH_TOKEN_FILE, "r", encoding="utf-8") as fh:
+                tok = fh.read().strip()
+            if len(tok) >= 24:
+                _CACHED_AUTH_TOKEN = tok
+                return _CACHED_AUTH_TOKEN
+        except Exception:
+            pass
+    tok = secrets.token_urlsafe(32)
+    _write_secret_file(AUTH_TOKEN_FILE, tok + "\n")
+    _CACHED_AUTH_TOKEN = tok
+    return _CACHED_AUTH_TOKEN
+
+
+def is_request_authenticated(request):
+    expected = get_auth_token()
+    auth_hdr = request.headers.get("Authorization", "")
+    candidate = ""
+    if auth_hdr.lower().startswith("bearer "):
+        candidate = auth_hdr[7:].strip()
+    if not candidate:
+        candidate = request.headers.get("X-TARS-Token", "").strip()
+    if not candidate:
+        candidate = request.cookies.get("tars_token", "").strip()
+    if not candidate:
+        candidate = request.query.get("token", "").strip()
+    return bool(candidate) and hmac.compare_digest(candidate, expected)
+
+
+def _create_verified_ssl_context():
+    ca_bundle = os.environ.get("TARS_CA_BUNDLE", "").strip()
+    if ca_bundle and os.path.isfile(ca_bundle):
+        ctx = ssl.create_default_context(cafile=ca_bundle)
+    else:
+        ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
+
+
+def _is_allowed_remote_host(host_str):
+    host = str(host_str or "").strip().lower()
+    if not host or any(c in host for c in " /\\@:?#\r\n"):
+        return False
+    if host.endswith(".ts.net") and re.fullmatch(r"[a-z0-9.-]+\.ts\.net", host):
+        return True
+    try:
+        ip_obj = ipaddress.ip_address(host)
+        if ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast:
+            return False
+        ts_net = ipaddress.ip_network("100.64.0.0/10")
+        if ip_obj in ts_net:
+            return True
+        if ip_obj.is_private and os.environ.get("TARS_ALLOW_LAN_PROXY", "0") == "1":
+            return True
+    except ValueError:
+        pass
+    return False
+
+
+def _sanitize_download_filename(name):
+    base = os.path.basename(str(name or "archivo")).replace("\r", "").replace("\n", "")
+    clean = re.sub(r'[^\w.\- ()]', "_", base).strip(" .")
+    return clean or "archivo"
+
+
+def _get_allowed_download_roots():
+    roots = [Path(MEDIA_DIR).resolve()]
+    if "UPLOADS_DIR" in globals():
+        roots.append(Path(UPLOADS_DIR).resolve())
+    extra = os.environ.get("TARS_ALLOWED_DOWNLOAD_DIRS", "").strip()
+    for entry in extra.split(":"):
+        entry = entry.strip()
+        if entry and os.path.isdir(entry):
+            roots.append(Path(entry).resolve())
+    return roots
 
 vosk.SetLogLevel(-1)
 vosk_model = None
@@ -873,27 +989,29 @@ def switch_antigravity_chat(target):
     if not target_id:
         return {"success": False, "error": f"No se encontro ningun chat con '{target}'"}
 
-    # Ejecutar click en el enlace mediante CDP
+    # Ejecutar click en el enlace mediante CDP (parametros serializados con json.dumps para evitar inyeccion JS)
+    safe_target_id_json = json.dumps(str(target_id))
+    safe_target_title_json = json.dumps(str(target_title or ""))
     js_click = f"""
     (() => {{
-        const targetId = "{target_id}";
-        const pill = document.querySelector('[data-testid="convo-pill-' + targetId + '"], [data-testid="conversation-item-' + targetId + '"], [data-convo-id="' + targetId + '"]');
+        const targetId = {safe_target_id_json};
+        const safeCss = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(targetId) : targetId.replace(/[^a-zA-Z0-9_-]/g, '');
+        const pill = document.querySelector('[data-testid="convo-pill-' + safeCss + '"], [data-testid="conversation-item-' + safeCss + '"], [data-convo-id="' + safeCss + '"]');
         if (pill) {{
             const btn = pill.closest('[role="button"]') || pill;
             btn.click();
             const title = pill.innerText.trim() || targetId;
             return {{ success: true, id: targetId, title: title }};
         }}
-        const link = document.querySelector('a[href*="/c/' + targetId + '"]');
+        const link = document.querySelector('a[href*="/c/' + safeCss + '"]');
         if (link) {{
             link.click();
             const title = link.getAttribute('aria-label') || link.innerText.trim().replace(/\\n+/g, ' ');
             return {{ success: true, id: targetId, title: title }};
         }}
-        // Fallback: Si no esta en el sidebar visible, navegar directamente preservando query params (?section=...)
         const search = window.location.search || '';
-        window.location.href = '/c/' + targetId + search;
-        return {{ success: true, id: targetId, title: "{target_title or ''}" }};
+        window.location.href = '/c/' + encodeURIComponent(targetId) + search;
+        return {{ success: true, id: targetId, title: {safe_target_title_json} }};
     }})()
     """
     res = eval_in_antigravity(js_click)
@@ -1359,7 +1477,7 @@ def execute_pc_task(command_text, target_chat_id=None, file_paths=None):
         return "Todos los sistemas de TARS estan en linea y conectados a Antigravity.", media, sent_to_ide
     elif any(kw in cmd_clean for kw in ["suspender hasta las 8", "dormir hasta las 8", "descansar hasta las 8", "suspender pc hasta las 8", "apagar hasta las 8"]):
         script_path = os.path.join(BASE_DIR, "dormir_hasta_las_8.sh")
-        subprocess.Popen(["bash", "-c", f"sleep 4 && bash '{script_path}' 08:00"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(["bash", "-c", 'sleep 4 && exec bash "$1" 08:00', "_", script_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return "Perfecto. En 4 segundos la PC entrará en suspensión y volverá a encenderse sola a las 8 de la mañana con Antigravity listo. ¡Buenas noches!", media, sent_to_ide
 
     # 6. Cerebro OpenCode: nivel de degradacion entre los shortcuts y Antigravity.
@@ -1458,11 +1576,20 @@ async def handle_chat(request):
                     clean_name = re.sub(r'[^\w\-.]', '_', orig_filename)
                     saved_name = f"{int(time.time())}_{clean_name}"
                     dest = os.path.join(UPLOADS_DIR, saved_name)
+                    written = 0
                     with open(dest, "wb") as f:
                         while True:
                             chunk = await part.read_chunk()
                             if not chunk:
                                 break
+                            written += len(chunk)
+                            if written > MAX_UPLOAD_BYTES:
+                                f.close()
+                                try:
+                                    os.remove(dest)
+                                except OSError:
+                                    pass
+                                return web.json_response({"reply": "Archivo demasiado grande."}, status=413)
                             f.write(chunk)
                     file_paths.append(dest)
         else:
@@ -1543,19 +1670,34 @@ async def handle_audio(request):
         client_chat_id = None
         file_paths = []
         temp_id = uuid.uuid4().hex[:8]
-        raw_path = f"/tmp/upload_{temp_id}.raw"
-        wav_path = f"/tmp/upload_{temp_id}.wav"
+        runtime_dir = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir(), f"tars_audio_{os.getuid() if hasattr(os, 'getuid') else 0}")
+        os.makedirs(runtime_dir, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(runtime_dir, 0o700)
+        except OSError:
+            pass
+        raw_path = os.path.join(runtime_dir, f"upload_{temp_id}.raw")
+        wav_path = os.path.join(runtime_dir, f"upload_{temp_id}.wav")
 
         while True:
             field = await reader.next()
             if not field:
                 break
             if field.name == "audio":
+                written = 0
                 with open(raw_path, "wb") as f:
                     while True:
                         chunk = await field.read_chunk()
                         if not chunk:
                             break
+                        written += len(chunk)
+                        if written > MAX_UPLOAD_BYTES:
+                            f.close()
+                            try:
+                                os.remove(raw_path)
+                            except OSError:
+                                pass
+                            return web.json_response({"reply": "Audio demasiado grande."}, status=413)
                         f.write(chunk)
             elif field.name == "chat_id":
                 val = await field.read()
@@ -1565,11 +1707,20 @@ async def handle_audio(request):
                 clean_name = re.sub(r'[^\w\-.]', '_', orig_filename)
                 saved_name = f"{int(time.time())}_{clean_name}"
                 dest = os.path.join(UPLOADS_DIR, saved_name)
+                written = 0
                 with open(dest, "wb") as f:
                     while True:
                         chunk = await field.read_chunk()
                         if not chunk:
                             break
+                        written += len(chunk)
+                        if written > MAX_UPLOAD_BYTES:
+                            f.close()
+                            try:
+                                os.remove(dest)
+                            except OSError:
+                                pass
+                            return web.json_response({"reply": "Archivo demasiado grande."}, status=413)
                         f.write(chunk)
                 file_paths.append(dest)
 
@@ -1586,8 +1737,8 @@ async def handle_audio(request):
         # Convertir a WAV 16kHz mono con ffmpeg
         await asyncio.to_thread(
             subprocess.run,
-            ["ffmpeg", "-y", "-i", raw_path, "-ar", "16000", "-ac", "1", wav_path],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True
+            ["ffmpeg", "-y", "-protocol_whitelist", "file,pipe", "-i", raw_path, "-ar", "16000", "-ac", "1", wav_path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=15
         )
 
         user_text = await asyncio.to_thread(transcribe_wav, wav_path)
@@ -1942,7 +2093,6 @@ def collect_turn_media_and_files(latest_msg, proc_info):
 
 async def handle_download(request):
     import urllib.parse
-    import zipfile
     raw_path = request.query.get("path", "").strip()
     if not raw_path:
         return web.json_response({"error": "Ruta vacia"}, status=400)
@@ -1952,37 +2102,26 @@ async def handle_download(request):
         clean_path = clean_path.replace("file://", "", 1)
     clean_path = clean_path.split("#")[0].strip()
 
-    # 0. Si el archivo existe localmente en esta PC, servirlo directamente
+    # 0. Validar estrictamente que la ruta resuelta este dentro de directorios permitidos (sin path traversal ni ZIP DoS)
     if os.path.exists(clean_path):
-        if os.path.isdir(clean_path):
-            folder_name = os.path.basename(clean_path.rstrip("/")) or "carpeta"
-            zip_filename = f"{folder_name}.zip"
-            zip_path = os.path.join("/tmp", f"tars_dl_{zip_filename}")
-            def _make_zip():
-                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                    for root, dirs, files in os.walk(clean_path):
-                        dirs[:] = [d for d in dirs if d not in (".git", "venv", "node_modules", "__pycache__")]
-                        for file in files:
-                            full_f = os.path.join(root, file)
-                            rel_f = os.path.relpath(full_f, os.path.dirname(clean_path.rstrip("/")))
-                            zf.write(full_f, rel_f)
-                return zip_path
-            await asyncio.to_thread(_make_zip)
-            return web.FileResponse(
-                zip_path,
-                headers={
-                    "Content-Disposition": f'attachment; filename="{zip_filename}"',
-                    "Cache-Control": "no-cache, no-store, must-revalidate",
-                    "Pragma": "no-cache",
-                    "Expires": "0"
-                }
-            )
+        try:
+            resolved = Path(clean_path).resolve(strict=True)
+        except OSError:
+            return web.json_response({"error": "Ruta invalida"}, status=400)
 
-        fname = os.path.basename(clean_path)
+        allowed_roots = _get_allowed_download_roots()
+        if not any(resolved == root or root in resolved.parents for root in allowed_roots):
+            return web.json_response({"error": "Acceso denegado: ruta fuera de directorios permitidos"}, status=403)
+
+        if resolved.is_dir():
+            return web.json_response({"error": "Descarga de directorios deshabilitada por seguridad"}, status=403)
+
+        safe_fname = _sanitize_download_filename(resolved.name)
+        encoded_fname = _url_quote(safe_fname)
         return web.FileResponse(
-            clean_path,
+            str(resolved),
             headers={
-                "Content-Disposition": f'attachment; filename="{fname}"',
+                "Content-Disposition": f"attachment; filename=\"{safe_fname}\"; filename*=UTF-8''{encoded_fname}",
                 "Content-Type": "application/octet-stream",
                 "Cache-Control": "no-cache, no-store, must-revalidate",
                 "Pragma": "no-cache",
@@ -1990,20 +2129,24 @@ async def handle_download(request):
             }
         )
 
-    # 1. Si no existe localmente pero está activa la PC remota en Tailscale, proxear el archivo desde allá
+    # 1. Si esta activa una PC remota autorizada en Tailscale, proxear con TLS verificado y token
     if is_remote_pc_active():
         rem_ip = get_active_pc_ip()
-        fname = os.path.basename(clean_path.rstrip("/")) or "archivo"
+        if not _is_allowed_remote_host(rem_ip):
+            return web.json_response({"error": "Host remoto no autorizado"}, status=403)
+        safe_fname = _sanitize_download_filename(os.path.basename(clean_path.rstrip("/")) or "archivo")
+        encoded_fname = _url_quote(safe_fname)
         rem_url = f"https://{rem_ip}:8443/api/download?path={urllib.parse.quote(clean_path)}"
-        fallback_media_url = f"https://{rem_ip}:8443/media/{urllib.parse.quote(fname)}"
+        fallback_media_url = f"https://{rem_ip}:8443/media/{urllib.parse.quote(safe_fname)}"
         def _fetch_rem_file():
-            ctx = ssl._create_unverified_context()
+            ctx = _create_verified_ssl_context()
+            hdrs = {"Authorization": f"Bearer {get_auth_token()}"}
             try:
-                req = urllib.request.Request(rem_url, method="GET")
+                req = urllib.request.Request(rem_url, headers=hdrs, method="GET")
                 with urllib.request.urlopen(req, context=ctx, timeout=25) as resp:
                     return resp.read(), resp.headers.get("Content-Type", "application/octet-stream")
             except Exception:
-                req2 = urllib.request.Request(fallback_media_url, method="GET")
+                req2 = urllib.request.Request(fallback_media_url, headers=hdrs, method="GET")
                 with urllib.request.urlopen(req2, context=ctx, timeout=25) as resp2:
                     return resp2.read(), resp2.headers.get("Content-Type", "application/octet-stream")
         try:
@@ -2012,7 +2155,7 @@ async def handle_download(request):
                 body=body,
                 content_type="application/octet-stream",
                 headers={
-                    "Content-Disposition": f'attachment; filename="{fname}"',
+                    "Content-Disposition": f"attachment; filename=\"{safe_fname}\"; filename*=UTF-8''{encoded_fname}",
                     "Cache-Control": "no-cache, no-store, must-revalidate",
                     "Pragma": "no-cache",
                     "Expires": "0"
@@ -2021,7 +2164,7 @@ async def handle_download(request):
         except Exception as e:
             return web.json_response({"error": f"No se pudo descargar de PC remota: {e}"}, status=404)
 
-    return web.json_response({"error": f"Archivo no encontrado: {clean_path}"}, status=404)
+    return web.json_response({"error": "Archivo no encontrado"}, status=404)
 
 
 async def handle_download_app(request):
@@ -3058,10 +3201,12 @@ def mark_remote_pc_unreachable(remote_ip):
         })
 
 def remote_api_request(remote_ip, path, method="GET", json_body=None, timeout=4.0):
-    ctx = ssl._create_unverified_context()
+    if not _is_allowed_remote_host(remote_ip):
+        return {"_proxy_error": "Host remoto no autorizado por politica de seguridad"}
+    ctx = _create_verified_ssl_context()
     url = f"https://{remote_ip}:8443{path}"
     data_bytes = None
-    headers = {}
+    headers = {"Authorization": f"Bearer {get_auth_token()}"}
     if json_body is not None:
         data_bytes = json.dumps(json_body).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -3078,14 +3223,16 @@ def remote_api_request(remote_ip, path, method="GET", json_body=None, timeout=4.
 def ensure_remote_media_cached(remote_ip, media_url):
     if not media_url or not str(media_url).startswith("/media/"):
         return
-    fname = os.path.basename(media_url)
+    if not _is_allowed_remote_host(remote_ip):
+        return
+    fname = _sanitize_download_filename(os.path.basename(media_url))
     local_dest = os.path.join(MEDIA_DIR, fname)
     if os.path.exists(local_dest) and os.path.getsize(local_dest) > 0:
         return
-    ctx = ssl._create_unverified_context()
-    url = f"https://{remote_ip}:8443/media/{fname}"
+    ctx = _create_verified_ssl_context()
+    url = f"https://{remote_ip}:8443/media/{_url_quote(fname)}"
     try:
-        req = urllib.request.Request(url)
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {get_auth_token()}"})
         with urllib.request.urlopen(req, context=ctx, timeout=15.0) as resp:
             content = resp.read()
             if content:
@@ -3201,6 +3348,8 @@ async def handle_select_pc(request):
             except Exception:
                 pass
         else:
+            if not _is_allowed_remote_host(target_id):
+                return web.json_response({"success": False, "error": "Host remoto no permitido: solo nodos Tailscale (.ts.net o 100.64.0.0/10)"}, status=403)
             if not target_name:
                 target_name = format_friendly_pc_name(target_hostname, target_id)
             _write_tars_state({
@@ -3229,8 +3378,8 @@ async def handle_add_pc(request):
         raw_ip = str(body.get("ip") or "").strip()
         raw_ip = re.sub(r"^https?://", "", raw_ip).split(":")[0].split("/")[0].strip()
         name = str(body.get("name") or "").strip() or format_friendly_pc_name("", raw_ip)
-        if not raw_ip:
-            return web.json_response({"success": False, "error": "IP inválida"}, status=400)
+        if not raw_ip or not _is_allowed_remote_host(raw_ip):
+            return web.json_response({"success": False, "error": "IP o host remoto no permitido: use una IP Tailscale (100.64.0.0/10) o dominio .ts.net"}, status=403)
         st = _read_tars_state()
         custom_pcs = [c for c in (st.get("custom_pcs") or []) if c.get("ip") != raw_ip]
         custom_pcs.append({"ip": raw_ip, "name": name})
@@ -3898,7 +4047,9 @@ async def handle_switch_model(request):
     except Exception as e:
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
-NTFY_TOPIC = "tars_santiago_a03"
+NTFY_TOPIC = os.environ.get("TARS_NTFY_TOPIC", "").strip()
+NTFY_URL = os.environ.get("TARS_NTFY_URL", "https://ntfy.sh").rstrip("/")
+NTFY_TOKEN = os.environ.get("TARS_NTFY_TOKEN", "").strip()
 VAPID_FILE = os.path.join(DEFAULT_CONFIG_DIR, "vapid_keys.json")
 SUBSCRIPTIONS_FILE = os.path.join(DEFAULT_CONFIG_DIR, "push_subscriptions.json")
 LAST_NOTIFIED_STEP = {"idx": 0}
@@ -3927,9 +4078,7 @@ def get_vapid_keys():
         )
         pub_b64 = base64.urlsafe_b64encode(raw_pub).decode("ascii").rstrip("=")
         data = {"private_pem": priv, "public_key": pub_b64}
-        os.makedirs(os.path.dirname(VAPID_FILE), exist_ok=True)
-        with open(VAPID_FILE, "w") as f:
-            json.dump(data, f, indent=2)
+        _write_secret_file(VAPID_FILE, json.dumps(data, indent=2))
         print("[TARS Web] Par de llaves VAPID autogenerado para WebPush.")
         return data
     except Exception as e:
@@ -3983,23 +4132,26 @@ def send_web_push_all(title, body, url="/", tag="tars-msg-latest"):
     except Exception as e:
         print(f"[TARS Web] Error general en WebPush: {e}")
 
-    # 2. Enviar también al canal ntfy.sh por si usa la app ntfy
-    try:
-        ascii_title = title.encode("ascii", errors="ignore").decode("ascii").strip() or "TARS - Antigravity"
-        req = urllib.request.Request(
-            f"https://ntfy.sh/{NTFY_TOPIC}",
-            data=clean_body.encode("utf-8"),
-            headers={
+    # 2. Enviar a ntfy SOLO si el usuario configuro explicitamente TARS_NTFY_TOPIC (nunca usar topic publico hardcodeado)
+    if NTFY_TOPIC:
+        try:
+            ascii_title = title.encode("ascii", errors="ignore").decode("ascii").strip() or "TARS - Antigravity"
+            ntfy_headers = {
                 "Title": ascii_title,
                 "Priority": "high",
-                "Tags": "robot,speech_balloon",
-                "Click": "https://" + os.environ.get("TARS_LOCAL_IP", "localhost") + ":8443"
-            },
-            method="POST"
-        )
-        urllib.request.urlopen(req, timeout=3)
-    except Exception as e:
-        print(f"[TARS Web] Error enviando push ntfy: {e}")
+                "Tags": "robot,speech_balloon"
+            }
+            if NTFY_TOKEN:
+                ntfy_headers["Authorization"] = f"Bearer {NTFY_TOKEN}"
+            req = urllib.request.Request(
+                f"{NTFY_URL}/{_url_quote(NTFY_TOPIC)}",
+                data=clean_body.encode("utf-8"),
+                headers=ntfy_headers,
+                method="POST"
+            )
+            urllib.request.urlopen(req, timeout=3)
+        except Exception as e:
+            print(f"[TARS Web] Error enviando push ntfy: {e}")
 
 async def handle_vapid_public_key(request):
     keys = get_vapid_keys()
@@ -4342,6 +4494,8 @@ _active_voice_call_ws = None
 
 async def handle_ws_voice_call(request):
     global _active_voice_call_ws
+    if not is_request_authenticated(request):
+        return web.json_response({"ok": False, "error": "No autorizado"}, status=401)
     if PipeWireVoiceBridge is None:
         return web.json_response(
             {"ok": False, "error": "PipeWireVoiceBridge no disponible"},
@@ -4464,22 +4618,86 @@ async def handle_ws_voice_call(request):
 
     return ws
 
+def _is_allowed_origin(origin):
+    if not origin:
+        return False
+    try:
+        from urllib.parse import urlparse as _up
+        p = _up(origin)
+        if p.scheme != "https":
+            return False
+        host = (p.hostname or "").lower()
+        if host in ("localhost", "127.0.0.1", get_local_ip().lower()):
+            return True
+        ts_ip = get_tailscale_ip()
+        if ts_ip and host == ts_ip.lower():
+            return True
+        if host.endswith(".ts.net"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def init_app():
+    PUBLIC_PATHS = {"/", "/sw.js", "/manifest.json", "/api/health"}
+
     @web.middleware
-    async def cors_middleware(request, handler):
+    async def security_middleware(request, handler):
+        origin = request.headers.get("Origin", "")
+        allowed_origin = origin if _is_allowed_origin(origin) else ""
+
         if request.method == "OPTIONS":
-            resp = web.Response(status=200)
+            resp = web.Response(status=204)
         else:
-            resp = await handler(request)
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+            is_public = request.path in PUBLIC_PATHS or request.path.startswith("/static/")
+            if not is_public and not is_request_authenticated(request):
+                resp = web.json_response({"error": "No autorizado: incluya Authorization: Bearer <TARS_AUTH_TOKEN>"}, status=401)
+            else:
+                resp = await handler(request)
+                q_tok = request.query.get("token", "").strip()
+                if request.path == "/" and q_tok and hmac.compare_digest(q_tok, get_auth_token()):
+                    resp.set_cookie(
+                        "tars_token",
+                        q_tok,
+                        httponly=True,
+                        secure=True,
+                        samesite="Strict",
+                        path="/"
+                    )
+
+        if allowed_origin:
+            resp.headers["Access-Control-Allow-Origin"] = allowed_origin
+            resp.headers["Vary"] = "Origin"
+            resp.headers["Access-Control-Allow-Credentials"] = "true"
+            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-TARS-Token"
+
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        resp.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; "
+            "media-src 'self' blob:; "
+            "connect-src 'self' wss: https:; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'"
+        )
+
         if request.path.startswith("/static/") or request.path in ("/", "/sw.js", "/manifest.json"):
             resp.headers["Cache-Control"] = "no-cache, must-revalidate"
             resp.headers["Pragma"] = "no-cache"
         return resp
 
-    app = web.Application(middlewares=[cors_middleware])
+    async def handle_health(request):
+        return web.json_response({"status": "ok"})
+
+    app = web.Application(middlewares=[security_middleware], client_max_size=MAX_UPLOAD_BYTES + 5 * 1024 * 1024)
+    app.router.add_get("/api/health", handle_health)
     app.router.add_get("/", handle_index)
     app.router.add_get("/sw.js", handle_sw)
     app.router.add_get("/manifest.json", handle_manifest)
@@ -4624,12 +4842,16 @@ def ensure_ssl_certificates(local_ip, tailscale_ip=None):
         cmd = [
             "openssl", "req", "-x509", "-newkey", "rsa:2048",
             "-keyout", KEY_FILE, "-out", CERT_FILE,
-            "-days", "3650", "-nodes",
+            "-days", "365", "-nodes",
             "-subj", f"/CN={local_ip}",
             "-addext", san
         ]
         try:
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            try:
+                os.chmod(KEY_FILE, 0o600)
+            except OSError:
+                pass
             print(f"[TARS Web] Certificado SSL generado con exito para IP {local_ip}")
         except Exception as e:
             print(f"[TARS Web] Error generando certificado SSL: {e}")
@@ -4666,22 +4888,18 @@ async def _handle_dual_8443(client_reader, client_writer, internal_tls_port, def
                 _pipe_stream(backend_reader, client_writer)
             )
         else:
-            # Plain HTTP on 8443 -> Redirect to https://
+            # Plain HTTP on 8443 -> Redirect seguro a https:// (sin Open Redirect ni CRLF injection)
             req_text = first_chunk.decode("latin-1", errors="ignore")
-            host_hdr = f"{default_host}:8443"
+            safe_host = f"{default_host}:8443"
             path = "/"
             lines = req_text.splitlines()
             if lines:
                 parts = lines[0].split()
                 if len(parts) >= 2:
-                    path = parts[1]
-            for line in lines[1:]:
-                if line.lower().startswith("host:"):
-                    host_hdr = line.split(":", 1)[1].strip()
-                    if ":" not in host_hdr:
-                        host_hdr = f"{host_hdr}:8443"
-                    break
-            location = f"https://{host_hdr}{path}"
+                    raw_path = parts[1]
+                    if raw_path.startswith("/") and not raw_path.startswith("//") and "\r" not in raw_path and "\n" not in raw_path:
+                        path = raw_path
+            location = f"https://{safe_host}{path}"
             resp = (
                 f"HTTP/1.1 302 Found\r\n"
                 f"Location: {location}\r\n"
@@ -4794,7 +5012,12 @@ async def async_main():
 
     ssl_context = None
     if os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
+        try:
+            os.chmod(KEY_FILE, 0o600)
+        except OSError:
+            pass
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
         ssl_context.load_cert_chain(CERT_FILE, KEY_FILE)
 
     if ssl_context:
@@ -4806,11 +5029,7 @@ async def async_main():
             host=["0.0.0.0", "::"],
             port=port
         )
-        try:
-            http_site = web.TCPSite(runner, "0.0.0.0", http_port)
-            await http_site.start()
-        except Exception as e:
-            print(f"[TARS Web] Puerto HTTP {http_port} ocupado ({e}), continuando en 8443.")
+        # Puerto HTTP plano 8080 deshabilitado por seguridad (F-01); solo HTTPS en 8443.
         magic_dns = get_tailscale_magicdns()
         primary_url = None
         if magic_dns:
@@ -4830,14 +5049,18 @@ async def async_main():
             print(f"           - https://{ts_ip}:{port} (Remoto Tailscale)")
             print(f"           - http://{ts_ip}:{http_port} (HTTP directo)")
 
+        auth_token = get_auth_token()
+        print(f"[TARS Web] Autenticacion Bearer habilitada (archivo: {AUTH_TOKEN_FILE}, permisos 0600).")
         if primary_url:
-            print_connection_qr(primary_url)
+            print_connection_qr(f"{primary_url}/?token={auth_token}")
 
         await server_8443.serve_forever()
     else:
-        site = web.TCPSite(runner, "0.0.0.0", port)
+        if os.environ.get("TARS_ALLOW_INSECURE_HTTP") != "1":
+            raise RuntimeError("Certificados TLS ausentes: negandose a iniciar sin HTTPS. Defina TARS_ALLOW_INSECURE_HTTP=1 solo para depuracion local en 127.0.0.1.")
+        site = web.TCPSite(runner, "127.0.0.1", port)
         await site.start()
-        print(f"[TARS Web] Servidor listo (sin SSL) en: http://{local_ip}:{port}")
+        print(f"[TARS Web] Servidor de depuracion (sin SSL, solo localhost) en: http://127.0.0.1:{port}")
         while True:
             await asyncio.sleep(3600)
 

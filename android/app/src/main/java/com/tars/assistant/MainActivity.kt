@@ -158,11 +158,11 @@ class MainActivity : AppCompatActivity() {
         s.domStorageEnabled = true
         s.databaseEnabled = true
         s.mediaPlaybackRequiresUserGesture = false
-        s.allowFileAccess = true
+        s.allowFileAccess = false
         s.cacheMode = WebSettings.LOAD_DEFAULT
-        s.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+        s.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         s.setSupportMultipleWindows(true)
-        s.javaScriptCanOpenWindowsAutomatically = true
+        s.javaScriptCanOpenWindowsAutomatically = false
         s.userAgentString = s.userAgentString + " TARS-Android-Shell/1.0"
 
         webView.addJavascriptInterface(AndroidBridge(this), "AndroidBridge")
@@ -174,14 +174,16 @@ class MainActivity : AppCompatActivity() {
         webView.webChromeClient = object : WebChromeClient() {
             override fun onPermissionRequest(request: PermissionRequest?) {
                 request?.let {
-                    val resources = it.resources
-                    for (r in resources) {
-                        if (r == PermissionRequest.RESOURCE_AUDIO_CAPTURE) {
-                            it.grant(arrayOf(PermissionRequest.RESOURCE_AUDIO_CAPTURE))
-                            return
-                        }
+                    if (!isAllowedTarsOrigin(it.origin)) {
+                        it.deny()
+                        return
                     }
-                    it.grant(resources)
+                    val allowed = it.resources.filter { r -> r == PermissionRequest.RESOURCE_AUDIO_CAPTURE }.toTypedArray()
+                    if (allowed.isNotEmpty()) {
+                        it.grant(allowed)
+                    } else {
+                        it.deny()
+                    }
                 }
             }
 
@@ -244,10 +246,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.webViewClient = object : WebViewClient() {
-            @SuppressLint("WebViewClientOnReceivedSslError")
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                // Proceder en conexiones locales o seguras de TARS sin bloquear por certificado autofirmado
-                handler?.proceed()
+                // Seguridad TLS estricta (F-17): rechazar certificados no confiables (usar tailscale cert o network_security_config.xml)
+                handler?.cancel()
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
@@ -327,13 +328,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun isAllowedTarsHost(hostRaw: String?): Boolean {
+        val host = hostRaw?.lowercase()?.trim() ?: return false
+        if (host == "localhost" || host == "127.0.0.1") return true
+        if (host.matches(Regex("^192\.168\.\d{1,3}\.\d{1,3}$"))) return true
+        if (host.matches(Regex("^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}$"))) return true
+        if (host.matches(Regex("^[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net$"))) return true
+        return false
+    }
+
+    private fun isAllowedTarsOrigin(origin: Uri?): Boolean {
+        if (origin == null) return false
+        val scheme = origin.scheme?.lowercase() ?: return false
+        return scheme == "https" && isAllowedTarsHost(origin.host)
+    }
+
     private fun handleUriNavigation(uri: Uri): Boolean {
         val urlStr = uri.toString()
         val scheme = uri.scheme?.lowercase() ?: return false
         if (scheme == "intent") {
+            // Bloquear Intent Redirection (F-19): solo permitir browsable https sin component ni selector
             try {
                 val intent = Intent.parseUri(urlStr, Intent.URI_INTENT_SCHEME)
-                startActivity(intent)
+                intent.addCategory(Intent.CATEGORY_BROWSABLE)
+                intent.component = null
+                intent.selector = null
+                val dataScheme = intent.data?.scheme?.lowercase()
+                if (dataScheme == "https") {
+                    startActivity(intent)
+                }
                 return true
             } catch (e: Exception) {
                 return true
@@ -343,12 +366,7 @@ class MainActivity : AppCompatActivity() {
             openExternalIntent(urlStr)
             return true
         }
-        val host = uri.host ?: ""
-        val isTarsHost = host.contains("192.168.") ||
-                host.contains("100.") ||
-                host.contains("127.0.0.1") ||
-                host.contains("localhost") ||
-                host.contains("ts.net")
+        val isTarsHost = scheme == "https" && isAllowedTarsHost(uri.host)
         if (!isTarsHost && (scheme == "http" || scheme == "https")) {
             openExternalIntent(urlStr)
             return true
@@ -534,7 +552,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             if (callWakeLock?.isHeld == false) {
-                callWakeLock?.acquire()
+                callWakeLock?.acquire(10 * 60 * 1000L)
             }
         } catch (e: Exception) {}
     }
@@ -842,16 +860,10 @@ class MainActivity : AppCompatActivity() {
             val url = URL(probeUrl)
             val conn = url.openConnection() as HttpURLConnection
 
-            if (conn is HttpsURLConnection) {
-                val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                    override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                    override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
-                })
-                val sc = SSLContext.getInstance("SSL")
-                sc.init(null, trustAllCerts, SecureRandom())
-                conn.sslSocketFactory = sc.socketFactory
-                conn.setHostnameVerifier { _, _ -> true }
+            // Validacion TLS estandar del sistema (F-17): sin TrustManager ni HostnameVerifier permisivos
+            if (conn !is HttpsURLConnection) {
+                conn.disconnect()
+                return false
             }
 
             conn.connectTimeout = timeoutMs

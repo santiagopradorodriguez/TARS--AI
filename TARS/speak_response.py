@@ -38,7 +38,8 @@ except ImportError as exc:
 STATE_FILE = ruta_estado()
 
 VOICE = "es-AR-TomasNeural"
-OUTPUT_FILE = "/tmp/antigravity_response.mp3"
+from tars_rutas import ruta_runtime
+OUTPUT_FILE = ruta_runtime("antigravity_response.mp3")
 
 def clean_latex_math(math_str):
     math_str = re.sub(r"\\frac\{([^{}]+)\}\{([^{}]+)\}", r" \1 sobre \2 ", math_str)

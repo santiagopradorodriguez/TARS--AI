@@ -90,14 +90,15 @@ START_CHIME = recurso_tars("tars_record_start.wav")
 END_CHIME = recurso_tars("tars_record_end.wav")
 CANCEL_TONE = recurso_tars("tars_cancel_tone.wav")
 PLAYER_PY = recurso_tars("tars_player.py")
-LOCK_FILE = "/tmp/tars_speaking.lock"
+from tars_rutas import ruta_runtime
+LOCK_FILE = ruta_runtime("tars_speaking.lock")
 
 CHAT_VOZ = "voz_pc"
 TITULO_CHAT = "TARS voz PC"
 AGENTE_VOZ = "tars"
 TIMEOUT_RESPUESTA = 120.0
-WAV_RESPUESTA = "/tmp/antigravity_response.wav"
-MP3_RESPUESTA = "/tmp/antigravity_response.mp3"
+WAV_RESPUESTA = ruta_runtime("antigravity_response.wav")
+MP3_RESPUESTA = ruta_runtime("antigravity_response.mp3")
 
 PALABRAS_ENVIAR = ("enviar", "envía", "envia", "cambio", "mandar", "listo")
 PALABRAS_CANCELAR = ("cancelar", "detener")
@@ -142,7 +143,7 @@ def set_mode(mode):
     elif mode == "off":
         msg = "Modo: Rojo - Silencio Total"
 
-    os.system(f'notify-send "TARS" "{msg}" -t 2000')
+    subprocess.run(["notify-send", "TARS", msg, "-t", "2000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 
 
 def send_ctrl_m():
@@ -587,7 +588,7 @@ def flujo_voz_opencode(stream, close_recognizer, texto_dictado=None):
 
     puente = obtener_puente()
     if puente is None:
-        os.system('notify-send "TARS" "OpenCode apagado, no se mando el pedido" -t 3000')
+        subprocess.run(["notify-send", "TARS", "OpenCode apagado, no se mando el pedido", "-t", "3000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         tocar(CANCEL_TONE)
         return None
 

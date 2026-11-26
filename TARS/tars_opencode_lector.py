@@ -44,9 +44,10 @@ except Exception:
     def clean_text_for_speech(texto):
         return str(texto or "")
 
-LOCK_FILE = "/tmp/tars_speaking.lock"
-WAV_RESPUESTA = "/tmp/opencode_response.wav"
-MP3_RESPUESTA = "/tmp/opencode_response.mp3"
+from tars_rutas import ruta_runtime
+LOCK_FILE = ruta_runtime("tars_speaking.lock")
+WAV_RESPUESTA = ruta_runtime("opencode_response.wav")
+MP3_RESPUESTA = ruta_runtime("opencode_response.mp3")
 PLAYER_PY = recurso_tars("tars_player.py")
 MAX_LARGO_VOZ = 1000
 

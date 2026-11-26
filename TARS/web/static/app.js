@@ -614,7 +614,7 @@ function appendMessage(sender, text, media = null, audioUrl = null, autoPlay = t
                         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
                             <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
                         </svg>
-                        <span class="file-name">Descargar ${fname}</span>
+                        <span class="file-name">Descargar ${escapeHtml(String(fname || ""))}</span>
                     </div>
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                         <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
@@ -1583,8 +1583,10 @@ function switchToLocalNetwork() {
             const newUrl = `https://${cleanIp}:${window.location.port || '8443'}`;
             serverLocalIp = cleanIp;
             serverLocalUrl = newUrl;
-            localStorage.setItem('tars_local_ip', cleanIp);
-            localStorage.setItem('tars_local_url', newUrl);
+            if (/^https:\/\/[a-zA-Z0-9.-]+(?::\d+)?$/.test(newUrl)) {
+                localStorage.setItem('tars_local_ip', cleanIp);
+                localStorage.setItem('tars_local_url', newUrl);
+            }
             window.location.href = newUrl;
         } else {
             showWhatsAppToast(
@@ -1747,7 +1749,7 @@ async function loadChatsList() {
             const msg = currentChatsTab === 'opencode'
                 ? 'Sin chats en OpenCode todavia'
                 : (data.error || 'No se detectaron chats abiertos');
-            chatsList.innerHTML = `<div class="empty-chats">${msg}</div>`;
+            chatsList.innerHTML = `<div class="empty-chats">${escapeHtml(String(msg || ""))}</div>`;
             return;
         }
 
@@ -1764,9 +1766,9 @@ async function loadChatsList() {
 
             item.innerHTML = `
                 <div class="chat-item-header">
-                    <span class="chat-item-title">${chat.title}</span>
+                    <span class="chat-item-title">${escapeHtml(String(chat.title || ""))}</span>
                     <div class="chat-item-meta">
-                        <span class="chat-pc-badge ${pcBadgeClass}">${pcName}</span>
+                        <span class="chat-pc-badge ${pcBadgeClass}">${escapeHtml(String(pcName || ""))}</span>
                         ${statusTag}
                         ${activeBadge}
                     </div>
@@ -2022,9 +2024,9 @@ async function loadModelsList() {
             top.className = 'model-item-top';
             let statusBadge = m.active
                 ? '<span class="chat-item-badge">En uso</span>'
-                : (m.effort ? `<span style="font-size:0.75rem;color:var(--text-muted);">${m.effort}</span>` : '');
+                : (m.effort ? `<span style="font-size:0.75rem;color:var(--text-muted);">${escapeHtml(String(m.effort))}</span>` : '');
             top.innerHTML = `
-                <span class="model-item-name">${m.name}</span>
+                <span class="model-item-name">${escapeHtml(String(m.name || ""))}</span>
                 ${statusBadge}
             `;
             card.appendChild(top);

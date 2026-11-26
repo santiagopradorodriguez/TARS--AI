@@ -21,8 +21,9 @@ except ImportError as exc:
                 return ruta
         return os.path.join(BASE_DIR, nombre)
 
-LOCK_FILE = "/tmp/tars_speaking.lock"
-AUDIO_FILE = sys.argv[1] if len(sys.argv) > 1 else "/tmp/antigravity_response.mp3"
+from tars_rutas import ruta_runtime
+LOCK_FILE = ruta_runtime("tars_speaking.lock")
+AUDIO_FILE = sys.argv[1] if len(sys.argv) > 1 else ruta_runtime("antigravity_response.mp3")
 
 CHIME_FILE = recurso_tars("gemini_chime.wav")
 

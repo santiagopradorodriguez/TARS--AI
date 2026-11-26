@@ -49,8 +49,9 @@ def announce_message(sender_name):
         clean_sender = "WhatsApp"
 
     text = f"Mensaje de {clean_sender}"
-    mp3_file = "/tmp/wa_msg.mp3"
-    wav_file = "/tmp/wa_msg.wav"
+    from tars_rutas import ruta_runtime
+    mp3_file = ruta_runtime("wa_msg.mp3")
+    wav_file = ruta_runtime("wa_msg.wav")
 
     try:
         if os.path.exists(wav_file):

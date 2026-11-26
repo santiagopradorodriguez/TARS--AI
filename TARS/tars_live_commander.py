@@ -7,6 +7,7 @@ import queue
 import asyncio
 import threading
 import subprocess
+from urllib.parse import urlparse
 import websockets
 import sounddevice as sd
 import numpy as np
@@ -75,24 +76,29 @@ class TarsLiveCommander:
                     "parts": [{"text": (
                         "Eres TARS, el asistente del sistema de esta PC con Pop!_OS Linux. "
                         "Hablas siempre en español rioplatense, conciso, inteligente y natural. "
-                        "Tienes acceso a ejecutar comandos en la computadora del usuario mediante la herramienta 'ejecutar_comando'. "
-                        "Usa 'xdg-open <url o app>' para abrir cosas, o comandos estándar de bash. "
+                        "Tienes acceso a acciones seguras y acotadas en la computadora mediante la herramienta 'ejecutar_accion' "
+                        "(abrir URLs https, controlar reproduccion multimedia con playerctl o consultar la hora). "
+                        "No ejecutes comandos arbitrarios de shell. "
                         "Responde de forma breve y fluida como en una conversación real."
                     )}]
                 },
                 "tools": [{
                     "functionDeclarations": [{
-                        "name": "ejecutar_comando",
-                        "description": "Ejecuta un comando en la terminal bash de Pop OS Linux.",
+                        "name": "ejecutar_accion",
+                        "description": "Ejecuta una accion segura de una lista blanca estricta (sin shell arbitrario).",
                         "parameters": {
                             "type": "OBJECT",
                             "properties": {
-                                "comando": {
+                                "accion": {
                                     "type": "STRING",
-                                    "description": "El comando bash a ejecutar."
+                                    "description": "Accion permitida: abrir_url, media_play, media_pause, media_next, media_previous, media_status."
+                                },
+                                "url": {
+                                    "type": "STRING",
+                                    "description": "URL https:// opcional, requerida solo para abrir_url."
                                 }
                             },
-                            "required": ["comando"]
+                            "required": ["accion"]
                         }
                     }]
                 }]
@@ -157,21 +163,40 @@ class TarsLiveCommander:
                 if self.ws:
                     await self.ws.send(json.dumps(msg))
 
-    async def execute_command(self, call_id, command):
-        print(f"\n\n⚙️ [TARS EJECUTANDO]: {command}")
-        try:
-            result = subprocess.check_output(command, shell=True, stderr=subprocess.STDOUT, timeout=5)
-            output_str = result.decode('utf-8', errors='replace')
-            success = True
-        except subprocess.TimeoutExpired:
-            output_str = "Comando lanzado en segundo plano (aplicación gráfica iniciada)."
-            success = True
-        except subprocess.CalledProcessError as e:
-            output_str = e.output.decode('utf-8', errors='replace')
+    async def execute_safe_action(self, call_id, accion, url=""):
+        accion = str(accion or "").strip().lower()
+        print(f"\n\n⚙️ [TARS ACCION SEGURA]: {accion}")
+        cmd = None
+        if accion == "abrir_url":
+            parsed = urlparse(str(url or "").strip())
+            if parsed.scheme == "https" and parsed.netloc:
+                cmd = ["xdg-open", str(url).strip()]
+            else:
+                output_str = "URL bloqueada: solo se permiten enlaces https:// validos."
+                success = False
+        elif accion in ("media_play", "media_pause", "media_next", "media_previous"):
+            sub = accion.replace("media_", "")
+            cmd = ["playerctl", sub]
+        elif accion == "media_status":
+            cmd = ["playerctl", "metadata", "--format", "{{ title }} - {{ artist }}"]
+        else:
+            output_str = f"Accion no permitida por politica de seguridad: {accion}"
             success = False
-        except Exception as e:
-            output_str = str(e)
-            success = False
+
+        if cmd is not None:
+            try:
+                result = subprocess.check_output(cmd, shell=False, stderr=subprocess.STDOUT, timeout=5)
+                output_str = result.decode('utf-8', errors='replace') or "Accion ejecutada."
+                success = True
+            except subprocess.TimeoutExpired:
+                output_str = "Accion lanzada en segundo plano."
+                success = True
+            except subprocess.CalledProcessError as e:
+                output_str = e.output.decode('utf-8', errors='replace')
+                success = False
+            except Exception as e:
+                output_str = str(e)
+                success = False
 
         print(f"📄 [Salida]: {output_str.strip()[:150]}")
 
@@ -180,7 +205,7 @@ class TarsLiveCommander:
                 "functionResponses": [
                     {
                         "id": call_id,
-                        "name": "ejecutar_comando",
+                        "name": "ejecutar_accion",
                         "response": {
                             "resultado": "éxito" if success else "error",
                             "salida": output_str
@@ -227,10 +252,10 @@ class TarsLiveCommander:
             if "toolCall" in data:
                 calls = data["toolCall"].get("functionCalls", [])
                 for call in calls:
-                    if call.get("name") == "ejecutar_comando":
+                    if call.get("name") == "ejecutar_accion":
                         call_id = call.get("id")
-                        comando = call.get("args", {}).get("comando", "")
-                        await self.execute_command(call_id, comando)
+                        args = call.get("args", {}) or {}
+                        await self.execute_safe_action(call_id, args.get("accion", ""), args.get("url", ""))
 
     async def run(self):
         print("="*60)

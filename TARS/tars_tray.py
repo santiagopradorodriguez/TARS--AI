@@ -107,7 +107,7 @@ def save_voice(voice):
         with open(STATE_FILE, "w") as f:
             json.dump(data, f)
         msg = "Voz Clásica (Tomás)" if voice == "edge" else "Voz Neuronal (Puck)"
-        os.system(f'notify-send "TARS" "Voz seleccionada: {msg}" -t 2000')
+        subprocess.run(["notify-send", "TARS", f"Voz seleccionada: {msg}", "-t", "2000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     except Exception:
         pass
 
@@ -127,7 +127,7 @@ def save_brain(brain):
     if not guardar_llave_estado("cerebro", brain):
         return False
     nombre = NOMBRE_CEREBRO.get(brain, brain)
-    os.system(f'notify-send "TARS" "Cerebro seleccionado: {nombre}" -t 2000')
+    subprocess.run(["notify-send", "TARS", f"Cerebro seleccionado: {nombre}", "-t", "2000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     return True
 
 def get_mode():
@@ -146,10 +146,10 @@ def stop_all_speech():
     subprocess.run(["pkill", "-9", "-f", "ffplay.*antigravity_response"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(["pkill", "-9", "-f", "tars_player.py"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        if os.path.exists("/tmp/tars_speaking.lock"):
-            os.remove("/tmp/tars_speaking.lock")
-        if os.path.exists("/tmp/tars_dictating.lock"):
-            os.remove("/tmp/tars_dictating.lock")
+        from tars_rutas import ruta_runtime
+        for lk in (ruta_runtime("tars_speaking.lock"), ruta_runtime("tars_dictating.lock")):
+            if os.path.exists(lk):
+                os.remove(lk)
     except Exception:
         pass
 
@@ -179,7 +179,7 @@ def save_mode(mode):
         sound = CANCEL_TONE
         msg = "Modo: Rojo - Silencio Total"
 
-    os.system(f'notify-send "TARS" "{msg}" -t 2000')
+    subprocess.run(["notify-send", "TARS", msg, "-t", "2000"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
 
     if sound and os.path.exists(sound):
         subprocess.Popen(["paplay", sound], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

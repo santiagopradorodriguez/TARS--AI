@@ -214,21 +214,11 @@ class TarsSyncService : Service() {
         var conn: HttpURLConnection? = null
         return try {
             val url = URL(urlString)
-            if (url.protocol.equals("https", ignoreCase = true)) {
-                val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
-                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                    override fun checkClientTrusted(certs: Array<X509Certificate>, authType: String) {}
-                    override fun checkServerTrusted(certs: Array<X509Certificate>, authType: String) {}
-                })
-                val sslContext = SSLContext.getInstance("TLS")
-                sslContext.init(null, trustAll, SecureRandom())
-                val httpsConn = url.openConnection() as HttpsURLConnection
-                httpsConn.sslSocketFactory = sslContext.socketFactory
-                httpsConn.setHostnameVerifier { _, _ -> true }
-                conn = httpsConn
-            } else {
-                conn = url.openConnection() as HttpURLConnection
+            // Seguridad TLS estricta (F-17): exigir HTTPS con verificacion de certificado y hostname estandar
+            if (!url.protocol.equals("https", ignoreCase = true)) {
+                return null
             }
+            conn = url.openConnection() as HttpsURLConnection
 
             conn.connectTimeout = timeoutMs
             conn.readTimeout = timeoutMs
