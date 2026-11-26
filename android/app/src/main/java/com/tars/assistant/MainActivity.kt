@@ -331,9 +331,9 @@ class MainActivity : AppCompatActivity() {
     private fun isAllowedTarsHost(hostRaw: String?): Boolean {
         val host = hostRaw?.lowercase()?.trim() ?: return false
         if (host == "localhost" || host == "127.0.0.1") return true
-        if (host.matches(Regex("^192\.168\.\d{1,3}\.\d{1,3}$"))) return true
-        if (host.matches(Regex("^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}$"))) return true
-        if (host.matches(Regex("^[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net$"))) return true
+        if (host.matches(Regex("""^192\.168\.\d{1,3}\.\d{1,3}$"""))) return true
+        if (host.matches(Regex("""^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}$"""))) return true
+        if (host.matches(Regex("""^[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net$"""))) return true
         return false
     }
 
