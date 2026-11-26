@@ -34,12 +34,23 @@ def get_tars_auth_token():
     return os.environ.get("TARS_AUTH_TOKEN", "").strip()
 
 def get_cert_sha256_fingerprint():
-    cert_file = os.path.join(_get_config_dir(), "certs", "cert.pem")
+    candidates = [
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs", "cert.pem"),
+        os.path.join(_get_config_dir(), "certs", "cert.pem"),
+        os.path.expanduser("~/repositorios/Jarvis-Assistant/TARS/certs/cert.pem"),
+    ]
+    for cert_file in candidates:
+        try:
+            if os.path.isfile(cert_file):
+                with open(cert_file, "r", encoding="utf-8") as fh:
+                    der = ssl.PEM_cert_to_DER_cert(fh.read())
+                return hashlib.sha256(der).hexdigest().lower()
+        except Exception:
+            pass
     try:
-        if os.path.isfile(cert_file):
-            with open(cert_file, "r", encoding="utf-8") as fh:
-                der = ssl.PEM_cert_to_DER_cert(fh.read())
-            return hashlib.sha256(der).hexdigest().lower()
+        pem = ssl.get_server_certificate(("127.0.0.1", 8443))
+        der = ssl.PEM_cert_to_DER_cert(pem)
+        return hashlib.sha256(der).hexdigest().lower()
     except Exception:
         pass
     return ""
