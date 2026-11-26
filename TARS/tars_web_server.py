@@ -3562,8 +3562,10 @@ async def handle_get_connection_mode(request):
         port = 8443
         local_url = f"https://{loc_ip}:{port}" if loc_ip else ""
         tailscale_url = f"https://{magic_dns}:{port}" if magic_dns else (f"https://{ts_ip}:{port}" if ts_ip else "")
-        qr_local = await asyncio.to_thread(generate_qr_data_url, local_url)
-        qr_tailscale = await asyncio.to_thread(generate_qr_data_url, tailscale_url)
+        tok = get_auth_token()
+        q = f"/?token={tok}" if tok else ""
+        qr_local = await asyncio.to_thread(generate_qr_data_url, f"{local_url}{q}" if local_url else "")
+        qr_tailscale = await asyncio.to_thread(generate_qr_data_url, f"{tailscale_url}{q}" if tailscale_url else "")
         return web.json_response({
             "success": True,
             "local_mode": local_mode,

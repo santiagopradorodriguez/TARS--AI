@@ -12,6 +12,17 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap, QImage, QFont
 from PyQt5.QtCore import Qt, QTimer
 
+
+def get_tars_auth_token():
+    token_file = os.path.join(os.environ.get("TARS_CONFIG_DIR") or os.path.expanduser("~/.gemini/config"), "tars_auth_token")
+    try:
+        if os.path.exists(token_file):
+            with open(token_file, "r", encoding="utf-8") as fh:
+                return fh.read().strip()
+    except Exception:
+        pass
+    return os.environ.get("TARS_AUTH_TOKEN", "").strip()
+
 def get_connection_info():
     info = {
         "local_ip": "127.0.0.1",
@@ -31,7 +42,9 @@ def get_connection_info():
         s.close()
     except Exception:
         pass
-    info["local_url"] = f"https://{info['local_ip']}:8443"
+    tok = get_tars_auth_token()
+    q = f"/?token={tok}" if tok else ""
+    info["local_url"] = f"https://{info['local_ip']}:8443{q}"
 
     # Tailscale
     try:
@@ -44,12 +57,12 @@ def get_connection_info():
         ips = ts_data.get("TailscaleIPs", [])
         if ips:
             info["tailscale_ip"] = ips[0]
-            info["tailscale_url"] = f"https://{ips[0]}:8443"
+            info["tailscale_url"] = f"https://{ips[0]}:8443{q}"
 
         magic = ts_data.get("Self", {}).get("DNSName", "").rstrip(".")
         if magic and ".ts.net" in magic:
             info["tailscale_magicdns"] = magic
-            info["tailscale_url"] = f"https://{magic}:8443"
+            info["tailscale_url"] = f"https://{magic}:8443{q}"
     except Exception:
         pass
 

@@ -37,6 +37,7 @@ class TarsSyncService : Service() {
     companion object {
         private const val PREFS_NAME = "tars_app_config"
         private const val KEY_LAST_WORKING_URL = "last_working_url"
+        private const val KEY_AUTH_TOKEN = "auth_token"
         private const val CHANNEL_FOREGROUND_ID = "tars_sync_service_channel"
         private const val CHANNEL_MESSAGE_ID = "tars_messages_channel"
         private const val NOTIFICATION_FOREGROUND_ID = 9001
@@ -224,6 +225,10 @@ class TarsSyncService : Service() {
             conn.readTimeout = timeoutMs
             conn.requestMethod = "GET"
             conn.setRequestProperty("User-Agent", "TARS-Android-SyncService/1.0")
+            val tok = prefs.getString(KEY_AUTH_TOKEN, "") ?: ""
+            if (tok.isNotBlank()) {
+                conn.setRequestProperty("X-TARS-Token", tok)
+            }
 
             if (conn.responseCode == 200) {
                 BufferedReader(InputStreamReader(conn.inputStream)).use { it.readText() }

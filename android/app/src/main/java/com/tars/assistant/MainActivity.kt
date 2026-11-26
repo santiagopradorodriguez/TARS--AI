@@ -45,6 +45,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -108,12 +110,55 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var pageLoadWatchdogJob: Job? = null
+    private var activeSettingsDialog: androidx.appcompat.app.AlertDialog? = null
+
+    private val qrScannerLauncher = registerForActivityResult(ScanContract()) { result ->
+        val raw = result.contents?.trim()
+        if (!raw.isNullOrBlank()) {
+            try {
+                val uri = Uri.parse(raw)
+                if (!isAllowedTarsOrigin(uri)) {
+                    Toast.makeText(this, "QR no valido para TARS (debe ser HTTPS local o Tailscale).", Toast.LENGTH_LONG).show()
+                    return@registerForActivityResult
+                }
+                val port = if (uri.port != -1) uri.port else 8443
+                val host = uri.host ?: return@registerForActivityResult
+                val baseUrl = "https://$host:$port"
+                val token = uri.getQueryParameter("token")?.trim() ?: ""
+
+                val editor = prefs.edit().putString(KEY_LAST_WORKING_URL, baseUrl)
+                if (token.isNotBlank()) {
+                    editor.putString(KEY_AUTH_TOKEN, token)
+                }
+                if (host.startsWith("192.168.") || host == "localhost" || host == "127.0.0.1") {
+                    editor.putString(KEY_LOCAL_IP, baseUrl)
+                } else {
+                    editor.putString(KEY_TS_DOMAIN, baseUrl)
+                }
+                editor.apply()
+
+                activeSettingsDialog?.dismiss()
+                activeSettingsDialog = null
+                try {
+                    TarsSyncService.startService(this@MainActivity)
+                } catch (e: Exception) {}
+
+                val loadTarget = if (token.isNotBlank()) "$baseUrl/?token=${Uri.encode(token)}" else baseUrl
+                loadingLayout.visibility = View.VISIBLE
+                webView.loadUrl(loadTarget)
+                Toast.makeText(this, "Vinculado por QR: $host", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "Error leyendo QR: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     companion object {
         private const val PREFS_NAME = "tars_app_config"
         private const val KEY_LOCAL_IP = "local_ip"
         private const val KEY_TS_DOMAIN = "ts_domain"
         private const val KEY_LAST_WORKING_URL = "last_working_url"
+        private const val KEY_AUTH_TOKEN = "auth_token"
         private const val TARS_MSG_NOTIFICATION_ID = 1001
     }
 
@@ -756,7 +801,13 @@ class MainActivity : AppCompatActivity() {
                 try {
                     TarsSyncService.startService(this@MainActivity)
                 } catch (e: Exception) {}
-                webView.loadUrl(chosenUrl)
+                val savedToken = prefs.getString(KEY_AUTH_TOKEN, "") ?: ""
+                val urlWithToken = if (savedToken.isNotBlank() && !chosenUrl.contains("token=")) {
+                    "${chosenUrl.trimEnd('/')}/?token=${Uri.encode(savedToken)}"
+                } else {
+                    chosenUrl
+                }
+                webView.loadUrl(urlWithToken)
                 // Watchdog: si después de 3.5s sigue el cartel de conectando, forzar escape
                 pageLoadWatchdogJob?.cancel()
                 pageLoadWatchdogJob = activityScope.launch {
@@ -942,7 +993,18 @@ class MainActivity : AppCompatActivity() {
         val dialogView = inflater.inflate(R.layout.dialog_settings, null)
         val editLocal = dialogView.findViewById<EditText>(R.id.editLocalIp)
         val editTs = dialogView.findViewById<EditText>(R.id.editTsDomain)
+        val btnScanQr = dialogView.findViewById<View>(R.id.btnScanQr)
         val btnScan = dialogView.findViewById<View>(R.id.btnScanLan)
+
+        btnScanQr?.setOnClickListener {
+            val opts = ScanOptions().apply {
+                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                setPrompt("Apunta al codigo QR de TARS en tu PC")
+                setBeepEnabled(true)
+                setOrientationLocked(false)
+            }
+            qrScannerLauncher.launch(opts)
+        }
         val progressScan = dialogView.findViewById<View>(R.id.progressScanLan)
         val textStatus = dialogView.findViewById<TextView>(R.id.textScanStatus)
 
@@ -1006,7 +1068,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        builder.show()
+        activeSettingsDialog = builder.show()
     }
 
     private fun showExitOrSettingsDialog() {
