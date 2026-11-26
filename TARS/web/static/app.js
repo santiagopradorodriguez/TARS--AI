@@ -2983,7 +2983,8 @@ class VoiceCallClient {
 
     buildWebSocketUrl() {
         const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        return `${proto}//${window.location.host}/ws/voice_call`;
+        const q = (typeof activeChatId === 'string' && activeChatId) ? `?chat_id=${encodeURIComponent(activeChatId)}` : '';
+        return `${proto}//${window.location.host}/ws/voice_call${q}`;
     }
 
     setState(state, subtitleText = '') {

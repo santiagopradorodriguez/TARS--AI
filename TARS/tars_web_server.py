@@ -4156,8 +4156,8 @@ async def handle_integraciones_heladera(request):
         res = heladera.listar_inventario()
     return web.json_response(res)
 
-def _find_antigravity_voice_ws_url():
-    """Busca entre todos los targets CDP de Antigravity el que tenga el boton o controles de Voice Mode."""
+def _find_antigravity_voice_ws_url(target_chat_id=None):
+    """Busca entre todos los targets CDP de Antigravity el que corresponda al chat_id o tenga Voice Mode."""
     targets = get_all_devtools_page_targets()
     fallback_url = None
     js_probe = """(() => {
@@ -4165,6 +4165,12 @@ def _find_antigravity_voice_ws_url():
         const startBtn = document.querySelector('[data-testid="voice-start-button"], button[aria-label="Start Voice mode"]');
         return { active: active, can_start: Boolean(startBtn && !startBtn.disabled), has_start: Boolean(startBtn) };
     })()"""
+    if target_chat_id:
+        for t in targets:
+            url = t.get("url", "")
+            ws_url = t.get("webSocketDebuggerUrl")
+            if ws_url and target_chat_id in url:
+                return ws_url
     for t in targets:
         title = t.get("title", "")
         url = t.get("url", "")
@@ -4179,7 +4185,7 @@ def _find_antigravity_voice_ws_url():
                 return ws_url
     return fallback_url or get_devtools_ws_url()
 
-def antigravity_voice_call_status():
+def antigravity_voice_call_status(target_chat_id=None):
     """Consulta via CDP el estado actual de Voice Mode en Antigravity."""
     js = """(() => {
         const controls = document.querySelector('[data-testid="voice-call-controls"]');
@@ -4199,7 +4205,7 @@ def antigravity_voice_call_status():
             speaker: speakerEl ? (speakerEl.getAttribute('data-speaker') || '') : ''
         };
     })()"""
-    ws_url = _find_antigravity_voice_ws_url()
+    ws_url = _find_antigravity_voice_ws_url(target_chat_id=target_chat_id)
     res = eval_in_antigravity(js, ws_url=ws_url)
     if not isinstance(res, dict):
         return {
@@ -4218,9 +4224,9 @@ def antigravity_voice_call_status():
         "speaker": res.get("speaker") or ""
     }
 
-def antigravity_voice_call_start():
+def antigravity_voice_call_start(target_chat_id=None):
     """Inicia Voice Mode en Antigravity via CDP haciendo click en voice-start-button."""
-    status = antigravity_voice_call_status()
+    status = antigravity_voice_call_status(target_chat_id=target_chat_id)
     if not status.get("ok"):
         return {"success": False, **status}
     if status.get("active"):
@@ -4233,7 +4239,7 @@ def antigravity_voice_call_start():
         btn.click();
         return 'CLICKED';
     })()"""
-    ws_url = _find_antigravity_voice_ws_url()
+    ws_url = _find_antigravity_voice_ws_url(target_chat_id=target_chat_id)
     click_res = eval_in_antigravity(js_click, ws_url=ws_url)
     if click_res != "CLICKED":
         return {
@@ -4256,9 +4262,9 @@ def antigravity_voice_call_start():
         "error": "Voice Mode no confirmo estado activo a tiempo"
     }
 
-def antigravity_voice_call_stop():
+def antigravity_voice_call_stop(target_chat_id=None):
     """Detiene Voice Mode en Antigravity via CDP haciendo click en voice-call-end."""
-    status = antigravity_voice_call_status()
+    status = antigravity_voice_call_status(target_chat_id=target_chat_id)
     if not status.get("ok"):
         return {"success": False, **status}
     if not status.get("active"):
@@ -4271,7 +4277,7 @@ def antigravity_voice_call_stop():
         endBtn.click();
         return 'CLICKED';
     })()"""
-    ws_url = _find_antigravity_voice_ws_url()
+    ws_url = _find_antigravity_voice_ws_url(target_chat_id=target_chat_id)
     click_res = eval_in_antigravity(js_click, ws_url=ws_url)
     if click_res != "CLICKED":
         return {
@@ -4344,7 +4350,8 @@ async def handle_ws_voice_call(request):
 
     ws = web.WebSocketResponse(heartbeat=20.0)
     await ws.prepare(request)
-    print("[TARS VoiceCall] Cliente WebSocket conectado en /ws/voice_call")
+    target_chat_id = request.query.get("chat_id", "").strip() or None
+    print(f"[TARS VoiceCall] Cliente WebSocket conectado en /ws/voice_call (chat_id={target_chat_id})")
 
     prev_ws = _active_voice_call_ws
     if prev_ws is not None and not prev_ws.closed:
@@ -4400,7 +4407,7 @@ async def handle_ws_voice_call(request):
             setup_info = await asyncio.to_thread(bridge.setup)
             print(f"[TARS VoiceCall] Puente PipeWire listo: {setup_info}")
 
-            start_res = await asyncio.to_thread(antigravity_voice_call_start)
+            start_res = await asyncio.to_thread(antigravity_voice_call_start, target_chat_id)
             voice_started = True
             print(f"[TARS VoiceCall] Voice Mode start: {start_res}")
 
@@ -4441,7 +4448,7 @@ async def handle_ws_voice_call(request):
 
             if voice_started:
                 try:
-                    stop_res = await asyncio.to_thread(antigravity_voice_call_stop)
+                    stop_res = await asyncio.to_thread(antigravity_voice_call_stop, target_chat_id)
                     print(f"[TARS VoiceCall] Voice Mode stop: {stop_res}")
                 except Exception as exc:
                     print(f"[TARS VoiceCall] Error deteniendo Voice Mode: {exc}")
