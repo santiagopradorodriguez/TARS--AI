@@ -63,6 +63,7 @@ import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
 import java.net.URL
+import org.json.JSONObject
 import javax.net.ssl.HttpsURLConnection
 
 class MainActivity : AppCompatActivity() {
@@ -181,6 +182,7 @@ class MainActivity : AppCompatActivity() {
                 loadingLayout.visibility = View.VISIBLE
                 loadingText.text = getString(R.string.connecting)
                 webView.loadUrl(loadTarget)
+                startPageLoadWatchdog(baseUrl)
                 Toast.makeText(this, "Vinculado por QR: $host", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(this, "Error leyendo QR: ${e.message}", Toast.LENGTH_LONG).show()
@@ -651,6 +653,7 @@ class MainActivity : AppCompatActivity() {
             if (callWakeLock?.isHeld == false) {
                 callWakeLock?.acquire(10 * 60 * 1000L)
             }
+            TarsSyncService.setCallActive(this, true)
         } catch (e: Exception) {}
     }
 
@@ -659,6 +662,7 @@ class MainActivity : AppCompatActivity() {
             if (callWakeLock?.isHeld == true) {
                 callWakeLock?.release()
             }
+            TarsSyncService.setCallActive(this, false)
         } catch (e: Exception) {}
     }
 
@@ -710,10 +714,10 @@ class MainActivity : AppCompatActivity() {
             val match = regex.find(lower)
             if (match != null) {
                 val command = match.groupValues.getOrNull(1)?.trim() ?: ""
-                val escaped = command.replace("\\", "\\\\").replace("'", "\\'").replace("\"", "\\\"").replace("\n", " ")
+                val quoted = JSONObject.quote(command)
                 stopNativeWakeWord()
                 webView.post {
-                    webView.evaluateJavascript("window.onNativeWakeWordDetected('$escaped');", null)
+                    webView.evaluateJavascript("window.onNativeWakeWordDetected($quoted);", null)
                 }
                 return
             }
@@ -854,22 +858,25 @@ class MainActivity : AppCompatActivity() {
                     chosenUrl
                 }
                 webView.loadUrl(urlWithToken)
-                // Watchdog: si después de 3.5s sigue el cartel de conectando, forzar escape
-                pageLoadWatchdogJob?.cancel()
-                pageLoadWatchdogJob = activityScope.launch {
-                    kotlinx.coroutines.delay(3500)
-                    if (loadingLayout.visibility == View.VISIBLE) {
-                        loadingLayout.visibility = View.GONE
-                        swipeRefresh.isRefreshing = false
-                        val curUrl = webView.url ?: ""
-                        if (curUrl.isBlank() || curUrl == "about:blank") {
-                            showConnectionFailedDialog(chosenUrl)
-                        }
-                    }
-                }
+                startPageLoadWatchdog(chosenUrl)
             } else {
                 loadingLayout.visibility = View.GONE
                 showConnectionFailedDialog(if (targetLocal.isNotBlank()) targetLocal else targetTs)
+            }
+        }
+    }
+
+    private fun startPageLoadWatchdog(targetUrl: String) {
+        pageLoadWatchdogJob?.cancel()
+        pageLoadWatchdogJob = activityScope.launch {
+            kotlinx.coroutines.delay(4500)
+            if (loadingLayout.visibility == View.VISIBLE) {
+                loadingLayout.visibility = View.GONE
+                swipeRefresh.isRefreshing = false
+                val curUrl = webView.url ?: ""
+                if (curUrl.isBlank() || curUrl == "about:blank") {
+                    showConnectionFailedDialog(targetUrl)
+                }
             }
         }
     }

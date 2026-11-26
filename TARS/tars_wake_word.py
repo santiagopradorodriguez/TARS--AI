@@ -494,7 +494,7 @@ def preparar_audio(texto):
 
 
 def reproducir_audio(info):
-    """Lanza tars_player.py, que toma el lock /tmp/tars_speaking.lock."""
+    """Lanza tars_player.py, que toma el lock en $XDG_RUNTIME_DIR/tars/tars_speaking.lock."""
     if not info or not info.get("wav") or not os.path.exists(info["wav"]):
         return False
     subprocess.run(["pkill", "-9", "-f", "ffplay.*antigravity_response"],

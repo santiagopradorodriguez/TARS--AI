@@ -12,7 +12,7 @@ Reglas:
   mapa opencode_sessions.json, por ejemplo voz_pc y el celular) ya tienen su
   propio lector, asi que aca se saltean.
 - Respeta el muteo de audio de PC del tray y la app (pc_audio_muted).
-- Respeta el lock /tmp/tars_speaking.lock: si TARS esta hablando, espera.
+- Respeta el lock en $XDG_RUNTIME_DIR/tars/tars_speaking.lock: si TARS esta hablando, espera.
 - Corta mensajes largos a 1000 caracteres con aviso, como el wake word.
 - Si el servicio se reinicia y cambia el puerto, el puente lo redescubre.
 """

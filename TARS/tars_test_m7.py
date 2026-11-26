@@ -37,12 +37,14 @@ if BASE_DIR not in sys.path:
 PY_VENV = os.path.expanduser("~/.gemini/tts_venv/bin/python")
 PY_SISTEMA = "/usr/bin/python3"
 
-WAV_DICTADO = "/tmp/tars_m7_dictado.wav"
-WAV_DICTADO_16K = "/tmp/tars_m7_dictado_16k.wav"
-WAV_CANCEL = "/tmp/tars_m7_cancelar.wav"
-WAV_CANCEL_16K = "/tmp/tars_m7_cancelar_16k.wav"
-MAPA_TEST = "/tmp/tars_m7_opencode_sessions.json"
-RUTA_ESTADO_TEST = "/tmp/tars_m7_estado_previo.json"
+from tars_rutas import ruta_runtime
+
+WAV_DICTADO = ruta_runtime("tars_m7_dictado.wav")
+WAV_DICTADO_16K = ruta_runtime("tars_m7_dictado_16k.wav")
+WAV_CANCEL = ruta_runtime("tars_m7_cancelar.wav")
+WAV_CANCEL_16K = ruta_runtime("tars_m7_cancelar_16k.wav")
+MAPA_TEST = ruta_runtime("tars_m7_opencode_sessions.json")
+RUTA_ESTADO_TEST = ruta_runtime("tars_m7_estado_previo.json")
 
 # El mapa de sesiones de estos tests va aparte para no pisar el del usuario
 os.environ.setdefault("TARS_OPENCODE_SESSIONS_FILE", MAPA_TEST)
@@ -716,8 +718,9 @@ def orquestar():
 
     if os.path.exists(MAPA_TEST):
         log(f"mapa de sesiones del test: {MAPA_TEST}")
-    if os.path.exists("/tmp/tars_speaking.lock"):
-        log("aviso: quedo /tmp/tars_speaking.lock de otro proceso, no lo toco")
+    lock_voz = ruta_runtime("tars_speaking.lock")
+    if os.path.exists(lock_voz):
+        log(f"aviso: quedo {lock_voz} de otro proceso, no lo toco")
 
     log("RESULTADO " + ("OK" if codigo == 0 else "CON FALLOS"))
     return codigo

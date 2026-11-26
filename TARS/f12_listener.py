@@ -8,12 +8,14 @@ import asyncio
 import websockets
 from pynput import keyboard
 
-STATE_FILE = "/home/santiago/.gemini/config/tars_state.json"
-CANCEL_TONE = "/home/santiago/.gemini/config/tars_cancel_tone.wav"
-RECORD_START_TONE = "/home/santiago/.gemini/config/tars_record_start.wav"
-RECORD_END_TONE = "/home/santiago/.gemini/config/tars_record_end.wav"
-CHIME_FILE = "/home/santiago/.gemini/config/gemini_chime.wav"
-from tars_rutas import ruta_runtime
+import sys
+from tars_rutas import python_tts, recurso_tars, ruta_estado, ruta_runtime
+
+STATE_FILE = ruta_estado()
+CANCEL_TONE = recurso_tars("tars_cancel_tone.wav")
+RECORD_START_TONE = recurso_tars("tars_record_start.wav")
+RECORD_END_TONE = recurso_tars("tars_record_end.wav")
+CHIME_FILE = recurso_tars("gemini_chime.wav")
 
 DICTATING_LOCK = ruta_runtime("tars_dictating.lock")
 CHATGPT_DICTATING_LOCK = ruta_runtime("chatgpt_dictating.lock")
@@ -21,7 +23,24 @@ OPENCODE_DICTATING_LOCK = ruta_runtime("opencode_dictating.lock")
 SPEAKING_LOCK = ruta_runtime("tars_speaking.lock")
 CHATGPT_VOICE_WAV = ruta_runtime("chatgpt_voice.wav")
 OPENCODE_VOICE_WAV = ruta_runtime("opencode_voice.wav")
-PYTHON_WHISPER = "/home/santiago/repositorios/CosmicGenerator/venv/bin/python3"
+
+
+def _resolver_python_whisper() -> str:
+    env_py = os.environ.get("TARS_WHISPER_PYTHON", "").strip()
+    if env_py and os.path.isfile(os.path.expanduser(env_py)):
+        return os.path.expanduser(env_py)
+    candidatos = [
+        os.path.expanduser("~/repositorios/CosmicGenerator/venv/bin/python3"),
+        python_tts(),
+        sys.executable or "python3",
+    ]
+    for cand in candidatos:
+        if cand and os.path.isfile(cand):
+            return cand
+    return sys.executable or "python3"
+
+
+PYTHON_WHISPER = _resolver_python_whisper()
 
 tap_times = []
 tap_lock = threading.Lock()

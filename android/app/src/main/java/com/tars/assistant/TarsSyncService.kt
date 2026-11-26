@@ -6,12 +6,15 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.Manifest
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -41,6 +44,22 @@ class TarsSyncService : Service() {
         private const val CHANNEL_MESSAGE_ID = "tars_messages_channel"
         private const val NOTIFICATION_FOREGROUND_ID = 9001
         private const val NOTIFICATION_MSG_ID = 1001
+        private const val ACTION_SET_CALL_MODE = "com.tars.assistant.ACTION_SET_CALL_MODE"
+        private const val EXTRA_CALL_ACTIVE = "extra_call_active"
+
+        fun setCallActive(context: Context, active: Boolean) {
+            try {
+                val intent = Intent(context, TarsSyncService::class.java).apply {
+                    action = ACTION_SET_CALL_MODE
+                    putExtra(EXTRA_CALL_ACTIVE, active)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {}
+        }
 
         fun startService(context: Context) {
             val intent = Intent(context, TarsSyncService::class.java)
@@ -58,6 +77,8 @@ class TarsSyncService : Service() {
     }
 
     private var lastNotifiedIndex = 0
+    private var lastSyncedUrl = ""
+    private var isCallActive = false
 
     override fun onCreate() {
         super.onCreate()
@@ -66,11 +87,20 @@ class TarsSyncService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val notification = createForegroundNotification()
-        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-        } else {
-            0
+        if (intent?.action == ACTION_SET_CALL_MODE) {
+            isCallActive = intent.getBooleanExtra(EXTRA_CALL_ACTIVE, false)
+        }
+        val notification = createForegroundNotification(isCallActive)
+        val hasMicPerm = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+        val fgsType = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && isCallActive && hasMicPerm ->
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            else -> 0
         }
         ServiceCompat.startForeground(this, NOTIFICATION_FOREGROUND_ID, notification, fgsType)
 
@@ -116,7 +146,7 @@ class TarsSyncService : Service() {
         }
     }
 
-    private fun createForegroundNotification(): android.app.Notification {
+    private fun createForegroundNotification(inCall: Boolean = false): android.app.Notification {
         val launchIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -129,8 +159,8 @@ class TarsSyncService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_FOREGROUND_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("TARS en linea")
-            .setContentText("Sincronizacion activa en segundo plano")
+            .setContentTitle(if (inCall) "TARS en llamada de voz" else "TARS en linea")
+            .setContentText(if (inCall) "Audio bidireccional activo en segundo plano" else "Sincronizacion activa en segundo plano")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(pendingIntent)
@@ -139,13 +169,17 @@ class TarsSyncService : Service() {
 
     private fun startSyncLoop() {
         syncJob = serviceScope.launch {
-            initLastIndex()
-
             while (isActive) {
                 try {
-                    val currentUrl = prefs.getString(KEY_LAST_WORKING_URL, "") ?: ""
+                    val currentUrl = (prefs.getString(KEY_LAST_WORKING_URL, "") ?: "").trim()
                     if (currentUrl.isNotBlank()) {
-                        pollSync(currentUrl)
+                        if (currentUrl != lastSyncedUrl) {
+                            if (initLastIndex(currentUrl)) {
+                                lastSyncedUrl = currentUrl
+                            }
+                        } else {
+                            pollSync(currentUrl)
+                        }
                     }
                 } catch (e: Exception) {
                     // Manejo silencioso de reconexion
@@ -155,17 +189,21 @@ class TarsSyncService : Service() {
         }
     }
 
-    private suspend fun initLastIndex() {
-        try {
-            val currentUrl = prefs.getString(KEY_LAST_WORKING_URL, "") ?: ""
-            if (currentUrl.isBlank()) return
-            val syncEndpoint = "${currentUrl.trimEnd('/')}/api/sync?last_index=999999"
+    private suspend fun initLastIndex(baseUrl: String): Boolean {
+        return try {
+            if (baseUrl.isBlank()) return false
+            val syncEndpoint = "${baseUrl.trimEnd('/')}/api/sync?last_index=999999"
             val responseText = executeHttpRequest(syncEndpoint, timeoutMs = 3000)
             if (responseText != null) {
                 val json = JSONObject(responseText)
                 lastNotifiedIndex = json.optInt("step_index", 0)
+                true
+            } else {
+                false
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun pollSync(baseUrl: String) {

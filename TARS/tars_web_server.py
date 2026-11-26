@@ -4658,6 +4658,18 @@ async def handle_ws_voice_call(request):
 
     return ws
 
+_ORIGIN_HOST_CACHE = {"ts": 0.0, "local_ip": "", "ts_ip": ""}
+
+
+def _get_cached_allowed_hosts():
+    now = time.monotonic()
+    if now - _ORIGIN_HOST_CACHE["ts"] > 30.0:
+        _ORIGIN_HOST_CACHE["local_ip"] = (get_local_ip() or "").lower()
+        _ORIGIN_HOST_CACHE["ts_ip"] = (get_tailscale_ip() or "").lower()
+        _ORIGIN_HOST_CACHE["ts"] = now
+    return _ORIGIN_HOST_CACHE["local_ip"], _ORIGIN_HOST_CACHE["ts_ip"]
+
+
 def _is_allowed_origin(origin):
     if not origin:
         return False
@@ -4667,10 +4679,10 @@ def _is_allowed_origin(origin):
         if p.scheme != "https":
             return False
         host = (p.hostname or "").lower()
-        if host in ("localhost", "127.0.0.1", get_local_ip().lower()):
+        local_ip, ts_ip = _get_cached_allowed_hosts()
+        if host in ("localhost", "127.0.0.1") or (local_ip and host == local_ip):
             return True
-        ts_ip = get_tailscale_ip()
-        if ts_ip and host == ts_ip.lower():
+        if ts_ip and host == ts_ip:
             return True
         if host.endswith(".ts.net"):
             return True
@@ -4695,7 +4707,6 @@ def init_app():
                 resp = web.json_response({"error": "No autorizado: incluya Authorization: Bearer <TARS_AUTH_TOKEN>"}, status=401)
             else:
                 resp = await handler(request)
-                q_tok = request.query.get("token", "").strip()
                 if not resp.prepared:
                     q_tok = request.query.get("token", "").strip()
                     if request.path == "/" and q_tok and hmac.compare_digest(q_tok, get_auth_token()):

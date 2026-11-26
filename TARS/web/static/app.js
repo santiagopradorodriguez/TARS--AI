@@ -51,7 +51,7 @@ function updateProcessingBubble(info) {
                 <span class="processing-pulse"></span>
                 <span class="processing-title">Laburando (Paso ${stepsCount})...</span>
             </div>
-            <button class="proc-stop-inline-btn" onclick="window.cancelCurrentProcessing()" title="Cortar procesamiento de inmediato">
+            <button type="button" class="proc-stop-inline-btn" title="Cortar procesamiento de inmediato">
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M6 6h12v12H6z"/></svg>
                 Cortar
             </button>
@@ -63,6 +63,17 @@ function updateProcessingBubble(info) {
             ${detailHtml}
         </div>
     `;
+
+    const inlineStopBtn = bubble.querySelector('.proc-stop-inline-btn');
+    if (inlineStopBtn) {
+        inlineStopBtn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (typeof window.cancelCurrentProcessing === 'function') {
+                window.cancelCurrentProcessing();
+            }
+        });
+    }
 
     scrollChatToBottom(false);
 }
@@ -269,7 +280,7 @@ function renderMarkdown(text) {
             '<div class="code-block-wrapper">' +
                 '<div class="code-header">' +
                     langLabel +
-                    '<button class="copy-code-btn" onclick="window.copyCode(this)">Copiar</button>' +
+                    '<button type="button" class="copy-code-btn">Copiar</button>' +
                 '</div>' +
                 '<pre><code>' + escapedCode + '</code></pre>' +
             '</div>'
@@ -309,7 +320,7 @@ function renderMarkdown(text) {
     });
     processed = processed.replace(/\[(.*?)\]\(file:\/\/(\/[^\)\s#]+)(?:#[^\)\s]*)?\)/g, (m, label, fpath) => {
         const fname = fpath.split('/').pop() || 'archivo';
-        return `<a href="/api/download?path=${encodeURIComponent(fpath)}" download="${escapeHtml(fname)}" class="inline-file-link" title="Descargar archivo">${label} ⬇</a>`;
+        return `<a href="/api/download?path=${encodeURIComponent(fpath)}" download="${escapeHtml(fname)}" class="inline-file-link" title="Descargar archivo">${label} [Descargar]</a>`;
     });
     // Auto-link URLs sueltas http:// o https://
     processed = processed.replace(/(^|[^"'>])(https?:\/\/[^\s<>\)]+)/g, (match, prefix, url) => {
@@ -2310,7 +2321,7 @@ async function loadPcsList() {
                 : '';
 
             const directLinkHtml = (!pc.is_local && pc.direct_url)
-                ? `<a href="${escapeHtml(pc.direct_url)}" target="_blank" rel="noopener" class="pc-direct-link" onclick="event.stopPropagation()" title="Abrir servidor web de esta PC directo">↗ Directo</a>`
+                ? `<a href="${escapeHtml(pc.direct_url)}" target="_blank" rel="noopener" class="pc-direct-link" title="Abrir servidor web de esta PC directo">Directo</a>`
                 : '';
 
             card.innerHTML = `
@@ -2327,6 +2338,10 @@ async function loadPcsList() {
                 </div>
             `;
 
+            const directLinkEl = card.querySelector('.pc-direct-link');
+            if (directLinkEl) {
+                directLinkEl.addEventListener('click', (ev) => ev.stopPropagation());
+            }
             card.addEventListener('click', () => {
                 selectTargetPc(pc);
             });
@@ -2924,6 +2939,16 @@ syncWithAntigravity();
 
 // Interceptor global de enlaces y descargas para compatibilidad universal (Android WebView + Chrome)
 document.addEventListener('click', (e) => {
+    const copyBtn = e.target.closest('.copy-code-btn');
+    if (copyBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof window.copyCode === 'function') {
+            window.copyCode(copyBtn);
+        }
+        return;
+    }
+
     const a = e.target.closest('a');
     if (!a) return;
 
@@ -2934,7 +2959,7 @@ document.addEventListener('click', (e) => {
     if (href.startsWith('/api/download') || href.includes('download_app') || href.startsWith('file:///api/') || a.classList.contains('inline-file-link') || a.classList.contains('file-card') || a.hasAttribute('download')) {
         e.preventDefault();
         e.stopPropagation();
-        let fname = a.getAttribute('download') || a.innerText.replace(/⬇/g, '').trim() || 'archivo';
+        let fname = a.getAttribute('download') || a.innerText.replace(/\[Descargar\]/g, '').trim() || 'archivo';
         if (fname === 'download_app' || href.includes('download_app') || href.endsWith('.apk')) {
             fname = 'TARS-Assistant.apk';
         }
@@ -2990,6 +3015,7 @@ class VoiceCallClient {
         this.isMuted = false;
         this.isCalling = false;
         this.isTearingDown = false;
+        this.hadServerError = false;
         this.timerInterval = null;
         this.callStartedAt = 0;
         this.state = 'idle';
@@ -3179,7 +3205,7 @@ class VoiceCallClient {
 
         if (this.audioCtx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
             try {
-                await this.audioCtx.audioWorklet.addModule('/static/voice_call_worklet.js?v=8.2');
+                await this.audioCtx.audioWorklet.addModule('/static/voice_call_worklet.js?v=8.3');
 
                 const workletNode = new AudioWorkletNode(this.audioCtx, 'voice-call-pcm-processor');
                 workletNode.port.onmessage = (event) => {
@@ -3265,6 +3291,7 @@ class VoiceCallClient {
         this.isCalling = true;
         this.isTearingDown = false;
         this.isMuted = false;
+        this.hadServerError = false;
 
         if (typeof stopCurrentAudio === 'function') stopCurrentAudio();
         if (typeof stopWakeWordListening === 'function') stopWakeWordListening();
@@ -3327,6 +3354,7 @@ class VoiceCallClient {
                     try {
                         const msg = JSON.parse(event.data);
                         if (msg && msg.error) {
+                            this.hadServerError = true;
                             this.setState('error', msg.error);
                         } else if (msg && msg.message && this.els.subtitle) {
                             this.els.subtitle.innerText = msg.message;
@@ -3343,7 +3371,16 @@ class VoiceCallClient {
 
             ws.onclose = () => {
                 if (this.isCalling && !this.isTearingDown) {
-                    this.hangup();
+                    if (this.hadServerError) {
+                        this.cleanupResources();
+                        setTimeout(() => {
+                            if (this.isCalling && !this.isTearingDown) {
+                                this.hangup();
+                            }
+                        }, 2400);
+                    } else {
+                        this.hangup();
+                    }
                 }
             };
         } catch (err) {

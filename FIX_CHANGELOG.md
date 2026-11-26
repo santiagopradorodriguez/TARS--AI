@@ -48,3 +48,19 @@ Este documento detalla todos los bugs, fallos de compilacion, problemas de conec
 ## 4. CI/CD
 
 - **Limpieza garantizada del keystore en `.github/workflows/build_apk.yml`:** Se agrego `set -euo pipefail` y `trap 'rm -f "$TARS_KEYSTORE_PATH"' EXIT` para asegurar la eliminacion del archivo keystore incluso si falla Gradle.
+## 5. Correcciones de Segunda Ronda (Auditoria Profunda)
+
+### Frontend Web y Compatibilidad CSP Estricta
+- **Eliminacion de todos los atributos `onclick` inline en `TARS/web/static/app.js` y `TARS/web/static/app_hud_preview.js`:** Bajo `Content-Security-Policy: script-src 'self'`, los botones de copiar codigo (`.copy-code-btn`), cancelar procesamiento inline (`.proc-stop-inline-btn`) y enlace directo a PC (`.pc-direct-link`) quedaban bloqueados por el navegador. Se reemplazaron por listeners nativos y delegacion de eventos en `document`.
+- **Visibilidad de errores en Modo Llamada (`TARS/web/static/app.js`):** Cuando `/ws/voice_call` enviaba `{"type": "error", ...}` y cerraba el socket, `ws.onclose` invocaba `hangup()` inmediatamente ocultando el mensaje de error. Ahora se registra `hadServerError` y se mantiene el mensaje visible 2.4 segundos antes de cerrar el overlay.
+- **Eliminacion de simbolos residuales y sincronizacion de cache (`app.js`, `index.html`, `sw.js`):** Se eliminaron las 2 ocurrencias residuales del simbolo flecha de descarga (`U+2B07`) en `app.js`, se agrego `credentials: 'same-origin'` a las llamadas `fetch` de acciones de notificacion en `sw.js`, y se actualizo la version de cache y assets a `v8.3`.
+
+### Backend Python y Servicios Locales
+- **Cache con TTL en `_is_allowed_origin` (`TARS/tars_web_server.py`):** Se evito abrir un socket UDP y ejecutar el subproceso `tailscale ip -4` en cada solicitud HTTP con cabecera `Origin`, cacheando ambas direcciones por 30 segundos y eliminando la lectura duplicada de `q_tok` en `security_middleware`.
+- **Eliminacion de rutas fijas de usuario y restos `/tmp/tars` (`TARS/f12_listener.py`, `TARS/tars_test_m7.py`, `TARS/tars_opencode_lector.py`, `TARS/tars_wake_word.py`):** `f12_listener.py` ahora resuelve `tars_state.json`, tonos `.wav` y el interprete de Whisper dinamicamente mediante `tars_rutas` y `TARS_WHISPER_PYTHON`; `tars_test_m7.py` y los comentarios residuales ahora usan `ruta_runtime(...)` en `$XDG_RUNTIME_DIR/tars/`.
+
+### Aplicacion Android y CI/CD
+- **Serializacion segura en `evaluateJavascript` (`MainActivity.kt`):** Se reemplazo el escape manual del comando de voz por `JSONObject.quote(command)` para prevenir fallos o inyecciones ante caracteres especiales o saltos de linea Unicode.
+- **Watchdog de carga al vincular por QR (`MainActivity.kt`):** `qrScannerLauncher` ahora inicia `startPageLoadWatchdog(baseUrl)` igual que `connectToBestNetwork`, evitando pantallas de carga infinitas si el host del QR no responde.
+- **Soporte de microfono en segundo plano (Android 14+) y reinicializacion de indice (`MainActivity.kt`, `TarsSyncService.kt`):** `TarsSyncService` ahora promueve dinamicamente el Foreground Service a `FOREGROUND_SERVICE_TYPE_DATA_SYNC | FOREGROUND_SERVICE_TYPE_MICROPHONE` durante llamadas activas (cuando `RECORD_AUDIO` esta concedido) y reinicializa `lastNotifiedIndex` automaticamente cuando cambia la URL del servidor vinculado, evitando notificaciones viejas duplicadas.
+- **Eliminacion de contrasena temporal hardcodeada en CI (`.github/workflows/build_apk.yml`):** El fallback de keystore efimero ahora genera una clave aleatoria criptografica con `openssl rand -hex 24`.

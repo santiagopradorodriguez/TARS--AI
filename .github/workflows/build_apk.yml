@@ -41,10 +41,11 @@ jobs:
           set -euo pipefail
           trap 'rm -f "$TARS_KEYSTORE_PATH"' EXIT
           if [ -z "$TARS_KEYSTORE_BASE64" ] || [ -z "$TARS_KEYSTORE_PASSWORD" ] || [ -z "$TARS_KEY_PASSWORD" ]; then
-            echo "Aviso: GitHub Secrets no configurados; generando keystore temporal para esta compilacion."
-            export TARS_KEYSTORE_PASSWORD="${TARS_KEYSTORE_PASSWORD:-tars_ephemeral_pass}"
+            echo "Aviso: GitHub Secrets no configurados; generando keystore temporal con clave aleatoria para esta compilacion."
+            EPHEMERAL_PASS="$(openssl rand -hex 24)"
+            export TARS_KEYSTORE_PASSWORD="${TARS_KEYSTORE_PASSWORD:-$EPHEMERAL_PASS}"
             export TARS_KEY_ALIAS="${TARS_KEY_ALIAS:-tars}"
-            export TARS_KEY_PASSWORD="${TARS_KEY_PASSWORD:-tars_ephemeral_pass}"
+            export TARS_KEY_PASSWORD="${TARS_KEY_PASSWORD:-$EPHEMERAL_PASS}"
             keytool -genkey -v -keystore "$TARS_KEYSTORE_PATH" -alias "$TARS_KEY_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -storepass "$TARS_KEYSTORE_PASSWORD" -keypass "$TARS_KEY_PASSWORD" -dname "CN=TARS, OU=AI, O=TARS, L=BA, S=BA, C=AR"
           else
             echo "$TARS_KEYSTORE_BASE64" | base64 -d > "$TARS_KEYSTORE_PATH"

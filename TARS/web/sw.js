@@ -1,9 +1,9 @@
-const CACHE_NAME = 'tars-shell-v8.2';
+const CACHE_NAME = 'tars-shell-v8.3';
 const PRECACHE_ASSETS = [
     '/',
-    '/static/style.css?v=8.2',
-    '/static/app.js?v=8.2',
-    '/static/voice_call_worklet.js?v=8.2',
+    '/static/style.css?v=8.3',
+    '/static/app.js?v=8.3',
+    '/static/voice_call_worklet.js?v=8.3',
     '/manifest.json',
     '/static/icon-192.png'
 ];
@@ -120,6 +120,7 @@ self.addEventListener('notificationclick', (event) => {
                 if (sub) {
                     fetch('/api/push_unsubscribe', {
                         method: 'POST',
+                        credentials: 'same-origin',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ endpoint: sub.endpoint })
                     }).catch(() => {});
@@ -133,7 +134,7 @@ self.addEventListener('notificationclick', (event) => {
     if (event.action === 'toggle_voice') {
         event.notification.close();
         event.waitUntil(
-            fetch('/api/toggle_mobile_voice', { method: 'POST' })
+            fetch('/api/toggle_mobile_voice', { method: 'POST', credentials: 'same-origin' })
                 .then((r) => r.json())
                 .then((data) => {
                     const muted = Boolean(data && data.mobile_voice_muted);

@@ -156,7 +156,7 @@ function updateProcessingBubble(info) {
                 <span class="processing-pulse"></span>
                 <span class="processing-title">PROCESANDO EN NODO // PASO ${stepsCount}</span>
             </div>
-            <button class="proc-stop-inline-btn" onclick="window.cancelCurrentProcessing()" title="Cortar procesamiento de inmediato">
+            <button type="button" class="proc-stop-inline-btn" title="Cortar procesamiento de inmediato">
                 <svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor"><rect x="5" y="5" width="14" height="14"/></svg>
                 ABORTAR
             </button>
@@ -168,6 +168,17 @@ function updateProcessingBubble(info) {
             ${detailHtml}
         </div>
     `;
+
+    const inlineStopBtn = bubble.querySelector('.proc-stop-inline-btn');
+    if (inlineStopBtn) {
+        inlineStopBtn.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (typeof window.cancelCurrentProcessing === 'function') {
+                window.cancelCurrentProcessing();
+            }
+        });
+    }
 
     chatContainer.scrollTop = chatContainer.scrollHeight;
 }
@@ -215,7 +226,7 @@ function renderMarkdown(text) {
             '<div class="code-block-wrapper">' +
                 '<div class="code-header">' +
                     langLabel +
-                    '<button class="copy-code-btn" onclick="window.copyCode(this)">COPIAR</button>' +
+                    '<button type="button" class="copy-code-btn">COPIAR</button>' +
                 '</div>' +
                 '<pre><code>' + escapedCode + '</code></pre>' +
             '</div>'
@@ -1717,7 +1728,7 @@ function buildPcCardElement(pc) {
         : (pc.tars_online ? 'TAILSCALE // TARS ONLINE' : (pc.online ? 'TAILSCALE // ONLINE' : 'OFFLINE'));
     const activeBadge = pc.active ? '<span class="chat-item-badge">ACTIVA</span>' : '';
     const directLinkHtml = (!pc.is_local && pc.direct_url)
-        ? `<a href="${escapeHtml(pc.direct_url)}" target="_blank" rel="noopener" class="pc-direct-link" onclick="event.stopPropagation()">DIRECTO</a>`
+        ? `<a href="${escapeHtml(pc.direct_url)}" target="_blank" rel="noopener" class="pc-direct-link">DIRECTO</a>`
         : '';
 
     card.innerHTML = `
@@ -1733,6 +1744,10 @@ function buildPcCardElement(pc) {
             ${activeBadge}
         </div>
     `;
+    const directEl = card.querySelector('.pc-direct-link');
+    if (directEl) {
+        directEl.addEventListener('click', (ev) => ev.stopPropagation());
+    }
     card.addEventListener('click', () => selectTargetPc(pc));
     return card;
 }
@@ -2151,3 +2166,12 @@ async function syncWithAntigravity() {
 loadInitialChatTitle();
 setInterval(syncWithAntigravity, 1500);
 syncWithAntigravity();
+
+document.addEventListener('click', (e) => {
+    const copyBtn = e.target.closest('.copy-code-btn');
+    if (copyBtn && typeof window.copyCode === 'function') {
+        e.preventDefault();
+        e.stopPropagation();
+        window.copyCode(copyBtn);
+    }
+});
