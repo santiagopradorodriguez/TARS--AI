@@ -124,13 +124,14 @@ def generate_qr_pixmap(url):
     img.save(buf, format="PNG")
     buf.seek(0)
     qimg = QImage.fromData(buf.getvalue())
-    return QPixmap.fromImage(qimg)
+    pix = QPixmap.fromImage(qimg)
+    return pix.scaled(270, 270, Qt.KeepAspectRatio, Qt.FastTransformation)
 
 class TarsQRDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Vincular Celular con TARS")
-        self.setFixedSize(480, 560)
+        self.setMinimumSize(520, 620)
         self.setStyleSheet("""
             QDialog {
                 background-color: #0f172a;
@@ -148,7 +149,7 @@ class TarsQRDialog(QDialog):
             QTabBar::tab {
                 background: #0f172a;
                 color: #94a3b8;
-                padding: 10px 20px;
+                padding: 8px 14px;
                 margin-right: 4px;
                 border-top-left-radius: 6px;
                 border-top-right-radius: 6px;
