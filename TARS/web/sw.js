@@ -1,8 +1,9 @@
-const CACHE_NAME = 'tars-shell-v8.0';
+const CACHE_NAME = 'tars-shell-v8.2';
 const PRECACHE_ASSETS = [
     '/',
-    '/static/style.css?v=8.0',
-    '/static/app.js?v=8.0',
+    '/static/style.css?v=8.2',
+    '/static/app.js?v=8.2',
+    '/static/voice_call_worklet.js?v=8.2',
     '/manifest.json',
     '/static/icon-192.png'
 ];
@@ -28,8 +29,15 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-    // No interceptar llamadas a APIs ni WebSockets para evitar romper la sincronizacion
-    if (event.request.url.includes('/api/') || event.request.url.includes('/ws') || event.request.url.includes('/media/')) {
+    const reqUrl = event.request.url || '';
+    // No interceptar APIs, WebSockets, media ni URLs con credenciales en query
+    if (
+        reqUrl.includes('/api/') ||
+        reqUrl.includes('/ws') ||
+        reqUrl.includes('/media/') ||
+        reqUrl.includes('token=') ||
+        reqUrl.includes('fp=')
+    ) {
         return;
     }
     if (event.request.method === 'GET') {

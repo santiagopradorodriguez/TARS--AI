@@ -67,6 +67,7 @@ class PipeWireVoiceBridge:
         self._saved_source_outputs: Dict[int, Union[int, str]] = {}
         self._pacat_proc: Optional[subprocess.Popen] = None
         self._parec_proc: Optional[subprocess.Popen] = None
+        self._async_parec_proc = None
         self._env = dict(os.environ, LC_ALL="C")
 
     def __enter__(self) -> "PipeWireVoiceBridge":
@@ -321,7 +322,7 @@ class PipeWireVoiceBridge:
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             env=self._env,
         )
 
@@ -378,7 +379,7 @@ class PipeWireVoiceBridge:
             self._build_parec_cmd(),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             env=self._env,
         )
         with self._lock:
@@ -410,9 +411,11 @@ class PipeWireVoiceBridge:
             *self._build_parec_cmd(),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
             env=self._env,
         )
+        with self._lock:
+            self._async_parec_proc = proc
         try:
             assert proc.stdout is not None
             while self._active:
@@ -421,6 +424,9 @@ class PipeWireVoiceBridge:
                     break
                 yield data
         finally:
+            with self._lock:
+                if self._async_parec_proc is proc:
+                    self._async_parec_proc = None
             if proc.returncode is None:
                 try:
                     proc.terminate()
@@ -535,6 +541,14 @@ class PipeWireVoiceBridge:
                 self._terminate_process(self._parec_proc)
             finally:
                 self._parec_proc = None
+
+            async_proc = self._async_parec_proc
+            self._async_parec_proc = None
+            if async_proc is not None and async_proc.returncode is None:
+                try:
+                    async_proc.terminate()
+                except Exception:
+                    pass
 
             try:
                 self._restore_streams()

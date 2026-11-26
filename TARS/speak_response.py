@@ -226,23 +226,24 @@ def main():
         if last_content:
             clean = clean_text_for_speech(last_content)
             if clean:
-                # Enviar notificacion push instantanea al celular (ntfy.sh/tars_santiago_a03) incluso si la pantalla esta apagada
-                try:
-                    preview = clean[:220]
-                    subprocess.Popen(
-                        [
-                            "curl", "-s",
-                            "-H", "Title: TARS - Nuevo mensaje",
-                            "-H", "Priority: high",
-                            "-H", "Tags: robot,speech_balloon",
-                            "-H", "Click: https://" + os.environ.get("TARS_LOCAL_IP", "localhost") + ":8443",
-                            "-d", preview,
-                            "https://ntfy.sh/tars_santiago_a03"
-                        ],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                except Exception:
-                    pass
+                # Enviar notificacion push por ntfy solo si el usuario configuro TARS_NTFY_TOPIC
+                ntfy_topic = os.environ.get("TARS_NTFY_TOPIC", "").strip()
+                if ntfy_topic:
+                    try:
+                        preview = clean[:220]
+                        subprocess.Popen(
+                            [
+                                "curl", "-s",
+                                "-H", "Title: TARS - Nuevo mensaje",
+                                "-H", "Priority: high",
+                                "-H", "Click: https://" + os.environ.get("TARS_LOCAL_IP", "localhost") + ":8443",
+                                "-d", preview,
+                                f"https://ntfy.sh/{ntfy_topic}"
+                            ],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
+                    except Exception:
+                        pass
                 # Limit length to ~1000 characters so it doesn't speak for 10 minutes on huge responses
                 if len(clean) > 1000:
                     cut = clean[:1000]

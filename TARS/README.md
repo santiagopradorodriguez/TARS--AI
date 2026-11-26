@@ -6,9 +6,9 @@ Este directorio contiene el código fuente de TARS, una interfaz de voz avanzada
 
 *   **Detección de Wake Word (Offline):** Utiliza `vosk` para detectar la frase "Hola TARS" en modo manos libres sin depender de la nube.
 *   **Semáforo de Privacidad (3 Estados):** 
-    *   🟢 **Verde (Modo Libre):** Escucha activamente la palabra clave.
-    *   🟡 **Amarillo (Push-to-Talk):** Desactiva el micrófono continuo y sólo escucha al presionar la tecla F12 (Walkie-Talkie).
-    *   🔴 **Rojo (Apagado/Killswitch):** Silencia el micrófono a nivel de sistema operativo (`pactl` / `wpctl`) y bloquea cualquier entrada.
+    *   **Verde (Modo Libre):** Escucha activamente la palabra clave.
+    *   **Amarillo (Push-to-Talk):** Desactiva el micrófono continuo y sólo escucha al presionar la tecla F12 (Walkie-Talkie).
+    *   **Rojo (Apagado/Killswitch):** Silencia el micrófono a nivel de sistema operativo (`pactl` / `wpctl`) y bloquea cualquier entrada.
 *   **Dictado Push-To-Talk (F12):** Integración nativa con teclado para dictar comandos largos y enviarlos automáticamente.
 *   **Feedback Acústico Aislado:** Genera tonos puros para confirmar inicio, envío y cancelación de comandos, aislados del reconocimiento de voz mediante `tars_player.py` para evitar que el asistente se escuche a sí mismo.
 *   **Filtro Matemático/LaTeX en TTS:** Procesa la sintaxis compleja de respuestas generadas (Markdown y LaTeX) traduciéndolas a expresiones habladas naturales en español (ej. flechas, unidades, fórmulas).

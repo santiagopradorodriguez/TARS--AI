@@ -38,6 +38,8 @@ jobs:
           TARS_KEY_PASSWORD: ${{ secrets.TARS_KEY_PASSWORD }}
           TARS_KEYSTORE_PATH: ${{ github.workspace }}/android/tars.keystore
         run: |
+          set -euo pipefail
+          trap 'rm -f "$TARS_KEYSTORE_PATH"' EXIT
           if [ -z "$TARS_KEYSTORE_BASE64" ] || [ -z "$TARS_KEYSTORE_PASSWORD" ] || [ -z "$TARS_KEY_PASSWORD" ]; then
             echo "Aviso: GitHub Secrets no configurados; generando keystore temporal para esta compilacion."
             export TARS_KEYSTORE_PASSWORD="${TARS_KEYSTORE_PASSWORD:-tars_ephemeral_pass}"
@@ -51,7 +53,6 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
-          rm -f "$TARS_KEYSTORE_PATH"
 
       - name: Renombrar APK para descarga directa
         run: |

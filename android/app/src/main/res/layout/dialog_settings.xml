@@ -13,14 +13,14 @@
             android:id="@+id/btnScanQr"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Escanear Código QR de la PC"
+            android:text="Escanear Codigo QR de la PC"
             android:textAllCaps="false"
             android:layout_marginBottom="14dp" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Configura la conexión con tu PC:\n\n• Opción A - Red Local Wi-Fi (En tu casa u oficina):\n1. En tu PC Linux abre la terminal y escribe: hostname -I\n2. Ingresa esa IP (ej. 192.168.1.50) en el campo IP Local.\n\n• Opción B - Tailscale (Conexión remota por datos o fuera de casa):\n1. Instala Tailscale en tu PC y en tu celular.\n2. En tu PC abre la terminal y escribe: tailscale ip -4\n3. Ingresa esa IP (ej. 100.x.y.z) en el campo Dominio / IP Tailscale.\n\nNota: La app conecta automáticamente al puerto seguro 8443."
+            android:text="Configura la conexion con tu PC:\n\n- Opcion A - Red Local Wi-Fi (Recomendado usar QR):\n1. En tu PC Linux abre el QR de TARS desde el icono de bandeja o consola.\n2. Escanea el QR para vincular automaticamente el token y el certificado local.\n3. Si ingresas la IP manualmente, ejecuta hostname -I en tu PC.\n\n- Opcion B - Tailscale (Conexion remota fuera de casa):\n1. Instala Tailscale en tu PC y en tu celular.\n2. Ingresa tu dominio MagicDNS (.ts.net) o IP de Tailscale.\n\nNota: La app conecta automaticamente por HTTPS al puerto seguro 8443."
             android:textSize="12sp"
             android:lineSpacingExtra="2dp"
             android:layout_marginBottom="16dp" />

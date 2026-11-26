@@ -31,10 +31,10 @@ ensure_antigravity() {
     fi
 }
 
-echo "🌙 Asegurando que Antigravity esté abierto antes de suspender..."
+echo "[TARS] Asegurando que Antigravity este abierto antes de suspender..."
 ensure_antigravity
 
-echo "⏰ Suspendiendo PC por $SECS segundos (despertará a las $WAKE_HUMAN)..."
+echo "[TARS] Suspendiendo PC por $SECS segundos (despertara a las $WAKE_HUMAN)..."
 if ! [[ "$SECS" =~ ^[0-9]+$ ]] || [ "$SECS" -le 0 ] || [ "$SECS" -gt 86400 ]; then
     echo "Error: intervalo de suspension fuera de rango." >&2
     exit 1
@@ -43,6 +43,6 @@ sudo -n /usr/sbin/rtcwake -m mem -s "$SECS"
 
 # Al despertar a las 08:00 AM:
 sleep 4
-echo "☀️ PC despierta ($(date)). Verificando Antigravity y TARS..."
+echo "[TARS] PC despierta ($(date)). Verificando Antigravity y TARS..."
 ensure_antigravity
 systemctl --user start tars-web.service 2>/dev/null || true

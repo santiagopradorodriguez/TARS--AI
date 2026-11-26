@@ -144,7 +144,7 @@ class TarsLiveCommander:
                 if rms > 200:
                     bars = min(int(rms / 150), 15)
                     meter = "█" * bars + "░" * (15 - bars)
-                    sys.stdout.write(f"\r🎤 [Voz detectada: |{meter}| {int(rms):4d}] ")
+                    sys.stdout.write(f"\r[Voz detectada: |{meter}| {int(rms):4d}] ")
                     sys.stdout.flush()
 
                 # Ganancia digital x1.8 para que Gemini escuche claro sin forzar la voz
@@ -165,7 +165,7 @@ class TarsLiveCommander:
 
     async def execute_safe_action(self, call_id, accion, url=""):
         accion = str(accion or "").strip().lower()
-        print(f"\n\n⚙️ [TARS ACCION SEGURA]: {accion}")
+        print(f"\n\n[TARS ACCION SEGURA]: {accion}")
         cmd = None
         if accion == "abrir_url":
             parsed = urlparse(str(url or "").strip())
@@ -198,7 +198,7 @@ class TarsLiveCommander:
                 output_str = str(e)
                 success = False
 
-        print(f"📄 [Salida]: {output_str.strip()[:150]}")
+        print(f"[Salida]: {output_str.strip()[:150]}")
 
         resp = {
             "toolResponse": {
@@ -226,7 +226,7 @@ class TarsLiveCommander:
 
                 # Interrupción del usuario (barge-in): si hablas mientras TARS habla, se calla
                 if sc.get("interrupted"):
-                    print("\n\n⚡ [Interrumpido por el usuario]")
+                    print("\n\n[Interrumpido por el usuario]")
                     while not self.audio_play_queue.empty():
                         try:
                             self.audio_play_queue.get_nowait()
@@ -240,7 +240,7 @@ class TarsLiveCommander:
                         if "text" in p and p["text"].strip():
                             t = p["text"].strip()
                             if not t.startswith("**"):
-                                print(f"\n🤖 TARS: {t}")
+                                print(f"\nTARS: {t}")
 
                         # Reproducir audio PCM
                         if "inlineData" in p:
@@ -259,7 +259,7 @@ class TarsLiveCommander:
 
     async def run(self):
         print("="*60)
-        print("🤖 INICIANDO TARS CONECTADO A GEMINI LIVE (TIEMPO REAL)...")
+        print("INICIANDO TARS CONECTADO A GEMINI LIVE (TIEMPO REAL)...")
         print("="*60)
 
         # Iniciar hilo de reproducción
@@ -271,8 +271,8 @@ class TarsLiveCommander:
             await self.setup()
 
             print("\n" + "="*60)
-            print("🚀 TARS ONLINE: ¡Háblale directamente al micrófono!")
-            print("💡 Tip: Verás la barra de volumen cuando detecte tu voz.")
+            print("TARS ONLINE: Hablale directamente al microfono.")
+            print("Tip: Veras la barra de volumen cuando detecte tu voz.")
             print("="*60 + "\n")
 
             await asyncio.gather(

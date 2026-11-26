@@ -4,6 +4,9 @@ import os
 import json
 import io
 import base64
+import getpass
+import hashlib
+import ssl
 import subprocess
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
@@ -13,8 +16,15 @@ from PyQt5.QtGui import QPixmap, QImage, QFont
 from PyQt5.QtCore import Qt, QTimer
 
 
+def _get_config_dir():
+    try:
+        from tars_rutas import directorio_config_tars
+        return directorio_config_tars()
+    except Exception:
+        return os.environ.get("TARS_CONFIG_DIR") or os.path.expanduser("~/.gemini/config")
+
 def get_tars_auth_token():
-    token_file = os.path.join(os.environ.get("TARS_CONFIG_DIR") or os.path.expanduser("~/.gemini/config"), "tars_auth_token")
+    token_file = os.path.join(_get_config_dir(), "tars_auth_token")
     try:
         if os.path.exists(token_file):
             with open(token_file, "r", encoding="utf-8") as fh:
@@ -23,13 +33,34 @@ def get_tars_auth_token():
         pass
     return os.environ.get("TARS_AUTH_TOKEN", "").strip()
 
+def get_cert_sha256_fingerprint():
+    cert_file = os.path.join(_get_config_dir(), "certs", "cert.pem")
+    try:
+        if os.path.isfile(cert_file):
+            with open(cert_file, "r", encoding="utf-8") as fh:
+                der = ssl.PEM_cert_to_DER_cert(fh.read())
+            return hashlib.sha256(der).hexdigest().lower()
+    except Exception:
+        pass
+    return ""
+
+def _build_qr_query(tok, fp):
+    parts = []
+    if tok:
+        parts.append(f"token={tok}")
+    if fp:
+        parts.append(f"fp={fp}")
+    return ("/?" + "&".join(parts)) if parts else ""
+
 def get_connection_info():
     info = {
         "local_ip": "127.0.0.1",
         "local_url": "",
+        "local_display_url": "",
         "tailscale_ip": "",
         "tailscale_magicdns": "",
         "tailscale_url": "",
+        "tailscale_display_url": "",
         "tailscale_state": "Desconocido",
         "tailscale_auth_url": ""
     }
@@ -37,14 +68,16 @@ def get_connection_info():
     import socket
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("10.254.254.254", 1))
+        s.connect(("8.8.8.8", 80))
         info["local_ip"] = s.getsockname()[0]
         s.close()
     except Exception:
         pass
     tok = get_tars_auth_token()
-    q = f"/?token={tok}" if tok else ""
-    info["local_url"] = f"https://{info['local_ip']}:8443{q}"
+    fp = get_cert_sha256_fingerprint()
+    q = _build_qr_query(tok, fp)
+    info["local_display_url"] = f"https://{info['local_ip']}:8443"
+    info["local_url"] = f"{info['local_display_url']}{q}"
 
     # Tailscale
     try:
@@ -57,12 +90,14 @@ def get_connection_info():
         ips = ts_data.get("TailscaleIPs", [])
         if ips:
             info["tailscale_ip"] = ips[0]
-            info["tailscale_url"] = f"https://{ips[0]}:8443{q}"
+            info["tailscale_display_url"] = f"https://{ips[0]}:8443"
+            info["tailscale_url"] = f"{info['tailscale_display_url']}{q}"
 
         magic = ts_data.get("Self", {}).get("DNSName", "").rstrip(".")
         if magic and ".ts.net" in magic:
             info["tailscale_magicdns"] = magic
-            info["tailscale_url"] = f"https://{magic}:8443{q}"
+            info["tailscale_display_url"] = f"https://{magic}:8443"
+            info["tailscale_url"] = f"{info['tailscale_display_url']}{q}"
     except Exception:
         pass
 
@@ -176,13 +211,14 @@ class TarsQRDialog(QDialog):
         v.setAlignment(Qt.AlignCenter)
 
         url = self.info.get("local_url", "")
+        display_url = self.info.get("local_display_url", url.split("?", 1)[0])
         pix = generate_qr_pixmap(url)
         qr_lbl = QLabel()
         qr_lbl.setPixmap(pix)
         qr_lbl.setAlignment(Qt.AlignCenter)
         v.addWidget(qr_lbl)
 
-        url_lbl = QLabel(f"<b>URL:</b> {url}")
+        url_lbl = QLabel(f"<b>URL:</b> {display_url}")
         url_lbl.setStyleSheet("font-size: 13px; color: #38bdf8;")
         url_lbl.setAlignment(Qt.AlignCenter)
         url_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -203,13 +239,14 @@ class TarsQRDialog(QDialog):
         url = self.info.get("tailscale_url", "")
 
         if state == "Running" and url:
+            display_url = self.info.get("tailscale_display_url", url.split("?", 1)[0])
             pix = generate_qr_pixmap(url)
             qr_lbl = QLabel()
             qr_lbl.setPixmap(pix)
             qr_lbl.setAlignment(Qt.AlignCenter)
             v.addWidget(qr_lbl)
 
-            url_lbl = QLabel(f"<b>URL Remota:</b> {url}")
+            url_lbl = QLabel(f"<b>URL Remota:</b> {display_url}")
             url_lbl.setStyleSheet("font-size: 13px; color: #38bdf8;")
             url_lbl.setAlignment(Qt.AlignCenter)
             url_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -243,7 +280,7 @@ class TarsQRDialog(QDialog):
     def activate_tailscale(self):
         try:
             self.ts_feedback.setText("Conectando con Tailscale...")
-            subprocess.run(["tailscale", "up", "--operator=" + os.environ.get("USER", "santiago")], capture_output=True, text=True, timeout=5)
+            subprocess.run(["tailscale", "up", "--operator=" + (os.environ.get("USER") or getpass.getuser())], capture_output=True, text=True, timeout=5)
             self.info = get_connection_info()
             # Recrear tab tailscale
             while self.tab_tailscale.layout().count():

@@ -23,6 +23,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.view.LayoutInflater
 import android.view.View
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
@@ -50,20 +51,19 @@ import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.Inet4Address
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.net.Socket
 import java.net.URL
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
 import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 
 class MainActivity : AppCompatActivity() {
 
@@ -79,7 +79,7 @@ class MainActivity : AppCompatActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var callWakeLock: PowerManager.WakeLock? = null
 
-    private val activityScope = CoroutineScope(Dispatchers.Main + Job())
+    private val activityScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val RECORD_AUDIO_PERMISSION_CODE = 101
 
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
@@ -112,30 +112,64 @@ class MainActivity : AppCompatActivity() {
     private var pageLoadWatchdogJob: Job? = null
     private var activeSettingsDialog: androidx.appcompat.app.AlertDialog? = null
 
+    private val cameraPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            startQrScannerInternal()
+        } else {
+            Toast.makeText(this, "Se requiere permiso de camara para escanear el codigo QR.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun launchQrScanner() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            startQrScannerInternal()
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun startQrScannerInternal() {
+        val opts = ScanOptions().apply {
+            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            setPrompt("Apunta al codigo QR de TARS en tu PC")
+            setBeepEnabled(true)
+            setOrientationLocked(false)
+        }
+        qrScannerLauncher.launch(opts)
+    }
+
     private val qrScannerLauncher = registerForActivityResult(ScanContract()) { result ->
         val raw = result.contents?.trim()
         if (!raw.isNullOrBlank()) {
             try {
                 val uri = Uri.parse(raw)
                 if (!isAllowedTarsOrigin(uri)) {
-                    Toast.makeText(this, "QR no valido para TARS (debe ser HTTPS local o Tailscale).", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "QR no valido para TARS: debe ser HTTPS local o Tailscale.", Toast.LENGTH_LONG).show()
                     return@registerForActivityResult
                 }
                 val port = if (uri.port != -1) uri.port else 8443
                 val host = uri.host ?: return@registerForActivityResult
                 val baseUrl = "https://$host:$port"
                 val token = uri.getQueryParameter("token")?.trim() ?: ""
+                val certFp = uri.getQueryParameter("fp")?.trim() ?: ""
 
                 val editor = prefs.edit().putString(KEY_LAST_WORKING_URL, baseUrl)
                 if (token.isNotBlank()) {
                     editor.putString(KEY_AUTH_TOKEN, token)
                 }
-                if (host.startsWith("192.168.") || host == "localhost" || host == "127.0.0.1") {
+                val isLanHost = host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.") || host == "localhost" || host == "127.0.0.1"
+                if (isLanHost) {
                     editor.putString(KEY_LOCAL_IP, baseUrl)
                 } else {
                     editor.putString(KEY_TS_DOMAIN, baseUrl)
                 }
                 editor.apply()
+
+                if (TarsTlsPinning.isValidFingerprint(certFp)) {
+                    TarsTlsPinning.savePinnedFingerprint(prefs, certFp)
+                }
 
                 activeSettingsDialog?.dismiss()
                 activeSettingsDialog = null
@@ -145,6 +179,7 @@ class MainActivity : AppCompatActivity() {
 
                 val loadTarget = if (token.isNotBlank()) "$baseUrl/?token=${Uri.encode(token)}" else baseUrl
                 loadingLayout.visibility = View.VISIBLE
+                loadingText.text = getString(R.string.connecting)
                 webView.loadUrl(loadTarget)
                 Toast.makeText(this, "Vinculado por QR: $host", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
@@ -209,6 +244,8 @@ class MainActivity : AppCompatActivity() {
         s.setSupportMultipleWindows(true)
         s.javaScriptCanOpenWindowsAutomatically = false
         s.userAgentString = s.userAgentString + " TARS-Android-Shell/1.0"
+        CookieManager.getInstance().setAcceptCookie(true)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, false)
 
         webView.addJavascriptInterface(AndroidBridge(this), "AndroidBridge")
 
@@ -292,12 +329,26 @@ class MainActivity : AppCompatActivity() {
 
         webView.webViewClient = object : WebViewClient() {
             override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
-                // Seguridad TLS estricta (F-17): rechazar certificados no confiables (usar tailscale cert o network_security_config.xml)
-                handler?.cancel()
+                // Pinning SHA-256 estricto del certificado vinculado por QR para redes locales autofirmadas
+                if (TarsTlsPinning.matchesPinnedSslError(error, prefs)) {
+                    handler?.proceed()
+                } else {
+                    handler?.cancel()
+                    pageLoadWatchdogJob?.cancel()
+                    loadingLayout.visibility = View.GONE
+                    swipeRefresh.isRefreshing = false
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Certificado HTTPS no verificado. Escanea el codigo QR en tu PC para vincular el certificado local.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    showConnectionFailedDialog(error?.url ?: "")
+                }
             }
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
+                CookieManager.getInstance().flush()
                 pageLoadWatchdogJob?.cancel()
                 loadingLayout.visibility = View.GONE
                 swipeRefresh.isRefreshing = false
@@ -314,12 +365,15 @@ class MainActivity : AppCompatActivity() {
                 return handleUriNavigation(Uri.parse(url))
             }
 
+            @Deprecated("Deprecated in Java")
             override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
                 super.onReceivedError(view, errorCode, description, failingUrl)
-                pageLoadWatchdogJob?.cancel()
-                loadingLayout.visibility = View.GONE
-                swipeRefresh.isRefreshing = false
-                showConnectionFailedDialog(failingUrl ?: "")
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+                    pageLoadWatchdogJob?.cancel()
+                    loadingLayout.visibility = View.GONE
+                    swipeRefresh.isRefreshing = false
+                    showConnectionFailedDialog(failingUrl ?: "")
+                }
             }
 
             @TargetApi(Build.VERSION_CODES.M)
@@ -358,14 +412,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun openExternalIntent(rawUrl: String) {
         val url = resolveAbsoluteUrl(rawUrl)
+        val parsed = try { Uri.parse(url) } catch (e: Exception) { return }
+        val scheme = parsed.scheme?.lowercase() ?: return
+        if (scheme != "https" && scheme != "http") {
+            return
+        }
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            val intent = Intent(Intent.ACTION_VIEW, parsed).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             startActivity(intent)
         } catch (e: Exception) {
             try {
-                val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                val browserIntent = Intent(Intent.ACTION_VIEW, parsed)
                 startActivity(browserIntent)
             } catch (e2: Exception) {
                 Toast.makeText(this@MainActivity, "No se pudo abrir el enlace: ${e2.message}", Toast.LENGTH_SHORT).show()
@@ -374,18 +433,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isAllowedTarsHost(hostRaw: String?): Boolean {
-        val host = hostRaw?.lowercase()?.trim() ?: return false
-        if (host == "localhost" || host == "127.0.0.1") return true
-        if (host.matches(Regex("""^192\.168\.\d{1,3}\.\d{1,3}$"""))) return true
-        if (host.matches(Regex("""^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}$"""))) return true
-        if (host.matches(Regex("""^[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net$"""))) return true
-        return false
+        return TarsTlsPinning.isAllowedTarsHost(hostRaw)
     }
 
     private fun isAllowedTarsOrigin(origin: Uri?): Boolean {
-        if (origin == null) return false
-        val scheme = origin.scheme?.lowercase() ?: return false
-        return scheme == "https" && isAllowedTarsHost(origin.host)
+        return TarsTlsPinning.isAllowedTarsOrigin(origin)
     }
 
     private fun handleUriNavigation(uri: Uri): Boolean {
@@ -740,20 +792,26 @@ class MainActivity : AppCompatActivity() {
     private fun normalizeUrl(raw: String, defaultPort: Int = 8443): String {
         var input = raw.trim().trimEnd('/')
         if (input.isBlank()) return ""
-        if (!input.startsWith("http://") && !input.startsWith("https://")) {
+        if (input.startsWith("http://", ignoreCase = true)) {
+            input = "https://" + input.substring(7)
+        } else if (!input.startsWith("https://", ignoreCase = true)) {
             input = "https://$input"
         }
-        val uri = URL(input)
-        return if (uri.port == -1) {
-            "${uri.protocol}://${uri.host}:$defaultPort"
-        } else {
-            input
+        return try {
+            val uri = URL(input)
+            val host = uri.host ?: return ""
+            if (!isAllowedTarsHost(host)) return ""
+            val port = if (uri.port == -1) defaultPort else uri.port
+            "https://$host:$port"
+        } catch (e: Exception) {
+            ""
         }
     }
 
     private fun connectToBestNetwork(localIp: String, tsDomain: String) {
         val targetLocal = normalizeUrl(localIp)
         val targetTs = normalizeUrl(tsDomain)
+        val lastWorking = normalizeUrl(prefs.getString(KEY_LAST_WORKING_URL, "") ?: "")
 
         pageLoadWatchdogJob?.cancel()
         loadingLayout.visibility = View.VISIBLE
@@ -761,26 +819,17 @@ class MainActivity : AppCompatActivity() {
 
         activityScope.launch {
             val chosenUrl = withContext(Dispatchers.IO) {
-                // Lista de candidatos ordenada
                 val candidates = mutableListOf<String>()
                 if (targetLocal.isNotBlank()) candidates.add(targetLocal)
                 if (targetTs.isNotBlank() && !candidates.contains(targetTs)) candidates.add(targetTs)
+                if (lastWorking.isNotBlank() && !candidates.contains(lastWorking)) candidates.add(lastWorking)
 
-                val known = listOf(
-                    "https://192.168.1.x:8443", // Lenovo Yoga Local
-                    "https://100.x.x.a:8443", // Lenovo Yoga Tailscale
-                    "https://192.168.1.y:8443", // Pop!_OS Local
-                    "https://100.x.x.b:8443"  // Pop!_OS Tailscale
-                )
-                for (k in known) {
-                    if (!candidates.contains(k)) candidates.add(k)
-                }
+                if (candidates.isEmpty()) return@withContext null
 
-                // Sondeo concurrente en paralelo para conexión ultrarrápida (<500ms)
                 val deferredProbes = candidates.map { url ->
                     async {
-                        val isLocal = url.contains("192.168.") || url.contains("127.0.0.1")
-                        val timeout = if (isLocal) 500 else 750
+                        val isLocal = url.contains("192.168.") || url.contains("10.") || url.contains("172.") || url.contains("127.0.0.1")
+                        val timeout = if (isLocal) 900 else 1500
                         if (testEndpointReachable(url, timeoutMs = timeout)) url else null
                     }
                 }
@@ -788,12 +837,9 @@ class MainActivity : AppCompatActivity() {
                 val reachable = deferredProbes.awaitAll().filterNotNull()
                 if (reachable.isEmpty()) return@withContext null
 
-                // Preferencias: 1) local guardado si respondió, 2) TS guardado si respondió, 3) primer local disponible, 4) primer TS
                 if (targetLocal in reachable) return@withContext targetLocal
                 if (targetTs in reachable) return@withContext targetTs
-
-                val firstLocal = reachable.firstOrNull { it.contains("192.168.") }
-                firstLocal ?: reachable.first()
+                reachable.first()
             }
 
             if (chosenUrl != null && chosenUrl.isNotBlank()) {
@@ -833,26 +879,20 @@ class MainActivity : AppCompatActivity() {
 
         val cleanFailed = if (failedUrl.isNotBlank()) failedUrl else "el servidor"
         val options = arrayOf(
-            "💻 Lenovo Yoga (Wi-Fi: 192.168.1.x)",
-            "🌐 Lenovo Yoga (Tailscale: 100.x.x.a)",
-            "🖥️ Pop!_OS (Wi-Fi: 192.168.1.y)",
-            "🌐 Pop!_OS (Tailscale: 100.x.x.b)",
-            "🔍 Escanear red Wi-Fi automáticamente",
-            "⚙️ Ingresar IP o dominio manualmente"
+            "Escanear codigo QR de la PC (recomendado)",
+            "Escanear red Wi-Fi automaticamente",
+            "Ingresar IP o dominio manualmente"
         )
 
         MaterialAlertDialogBuilder(this)
             .setTitle("Error al conectar con TARS")
-            .setMessage("No se pudo conectar a $cleanFailed.\nElige a qué PC conectar:")
+            .setMessage("No se pudo conectar a $cleanFailed.\nElige como reconectar:")
             .setItems(options) { dialog, which ->
                 dialog.dismiss()
                 when (which) {
-                    0 -> saveAndConnect("https://192.168.1.x:8443", "100.x.x.a:8443")
-                    1 -> saveAndConnect("192.168.1.x:8443", "https://100.x.x.a:8443")
-                    2 -> saveAndConnect("https://192.168.1.y:8443", "100.x.x.b:8443")
-                    3 -> saveAndConnect("192.168.1.y:8443", "https://100.x.x.b:8443")
-                    4 -> autoScanWifiAndConnect()
-                    5 -> showSettingsDialog(isFirstRun = false)
+                    0 -> launchQrScanner()
+                    1 -> autoScanWifiAndConnect()
+                    2 -> showSettingsDialog(isFirstRun = false)
                 }
             }
             .setPositiveButton("Reintentar") { dialog, _ ->
@@ -906,27 +946,43 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun testEndpointReachable(baseUrl: String, timeoutMs: Int): Boolean {
-        try {
-            val probeUrl = "$baseUrl/api/connection_mode"
+        var conn: HttpURLConnection? = null
+        return try {
+            val probeUrl = "${baseUrl.trimEnd('/')}/api/health"
             val url = URL(probeUrl)
-            val conn = url.openConnection() as HttpURLConnection
-
-            // Validacion TLS estandar del sistema (F-17): sin TrustManager ni HostnameVerifier permisivos
-            if (conn !is HttpsURLConnection) {
-                conn.disconnect()
+            if (!url.protocol.equals("https", ignoreCase = true) || !isAllowedTarsHost(url.host)) {
                 return false
             }
+            val httpsConn = url.openConnection() as HttpsURLConnection
+            TarsTlsPinning.applyPinnedTls(httpsConn, prefs)
+            conn = httpsConn
 
-            conn.connectTimeout = timeoutMs
-            conn.readTimeout = timeoutMs
-            conn.requestMethod = "GET"
-            conn.instanceFollowRedirects = false
-            conn.connect()
-            val code = conn.responseCode
-            conn.disconnect()
-            return code in 200..399
+            httpsConn.connectTimeout = timeoutMs
+            httpsConn.readTimeout = timeoutMs
+            httpsConn.requestMethod = "GET"
+            httpsConn.instanceFollowRedirects = false
+            val tok = prefs.getString(KEY_AUTH_TOKEN, "") ?: ""
+            if (tok.isNotBlank()) {
+                httpsConn.setRequestProperty("X-TARS-Token", tok)
+            }
+            httpsConn.connect()
+            val code = httpsConn.responseCode
+            code in 200..399
         } catch (e: Exception) {
-            return false
+            false
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    private fun testTcpPortOpen(host: String, port: Int, timeoutMs: Int): Boolean {
+        return try {
+            Socket().use { sock ->
+                sock.connect(InetSocketAddress(host, port), timeoutMs)
+                true
+            }
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -967,9 +1023,13 @@ class MainActivity : AppCompatActivity() {
                 val jobs = chunk.map { ip ->
                     async {
                         val testUrl = "https://$ip:8443"
-                        if (testEndpointReachable(testUrl, timeoutMs = 350)) {
-                            testUrl
-                        } else null
+                        val hasPin = TarsTlsPinning.getPinnedFingerprint(prefs).isNotEmpty()
+                        val reachable = if (hasPin) {
+                            testEndpointReachable(testUrl, timeoutMs = 400)
+                        } else {
+                            testTcpPortOpen(ip, 8443, 300)
+                        }
+                        if (reachable) testUrl else null
                     }
                 }
                 val results = jobs.awaitAll()
@@ -997,13 +1057,7 @@ class MainActivity : AppCompatActivity() {
         val btnScan = dialogView.findViewById<View>(R.id.btnScanLan)
 
         btnScanQr?.setOnClickListener {
-            val opts = ScanOptions().apply {
-                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
-                setPrompt("Apunta al codigo QR de TARS en tu PC")
-                setBeepEnabled(true)
-                setOrientationLocked(false)
-            }
-            qrScannerLauncher.launch(opts)
+            launchQrScanner()
         }
         val progressScan = dialogView.findViewById<View>(R.id.progressScanLan)
         val textStatus = dialogView.findViewById<TextView>(R.id.textScanStatus)
@@ -1087,6 +1141,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        pageLoadWatchdogJob?.cancel()
+        activityScope.cancel()
         releaseCallWakeLockInternal()
         stopNativeWakeWord()
         try {

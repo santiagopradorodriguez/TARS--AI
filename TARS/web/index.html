@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#0f1117">
     <title>TARS Movil</title>
     <link rel="manifest" href="/manifest.json">
-    <link rel="stylesheet" href="/static/style.css?v=8.0">
+    <link rel="stylesheet" href="/static/style.css?v=8.2">
 </head>
 <body>
     <div class="app-container">
@@ -356,7 +356,7 @@
                     <p><strong>• Opción 1: Red Local Wi-Fi (en tu casa u oficina)</strong></p>
                     <p>1. Conecta tu celular al mismo Wi-Fi de tu casa.</p>
                     <p>2. En tu PC Linux abre la terminal y escribe: <span class="guide-code">hostname -I</span></p>
-                    <p>3. Abre en tu celular: <span class="guide-code">https://tu-ip:8443</span> (ej. <em>https://192.168.1.50:8443</em>). En el primer ingreso, pulsa "Configuración avanzada" &gt; "Acceder de todos modos" para autorizar el certificado SSL local.</p>
+                    <p>3. Escanea el codigo QR de arriba o abre <span class="guide-code">https://tu-ip:8443</span> en tu celular. Al usar la app Android, el QR vincula automaticamente el token y el certificado local.</p>
                     <p><strong>• Opción 2: Tailscale (conexión remota segura desde cualquier lugar)</strong></p>
                     <p>1. Instala Tailscale en tu PC y en tu celular (gratuito) e inicia sesión con la misma cuenta.</p>
                     <p>2. En tu PC escribe en la terminal: <span class="guide-code">tailscale ip -4</span> (ej. <em>100.x.y.z</em>).</p>
@@ -425,6 +425,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=8.1"></script>
+    <script src="/static/app.js?v=8.2"></script>
 </body>
 </html>

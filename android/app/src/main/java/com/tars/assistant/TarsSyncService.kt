@@ -7,12 +7,16 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -21,16 +25,11 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
 import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 
 class TarsSyncService : Service() {
 
-    private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
+    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var syncJob: Job? = null
     private lateinit var prefs: SharedPreferences
 
@@ -68,7 +67,12 @@ class TarsSyncService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification = createForegroundNotification()
-        startForeground(NOTIFICATION_FOREGROUND_ID, notification)
+        val fgsType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        } else {
+            0
+        }
+        ServiceCompat.startForeground(this, NOTIFICATION_FOREGROUND_ID, notification, fgsType)
 
         if (syncJob == null || syncJob?.isActive == false) {
             startSyncLoop()
@@ -82,6 +86,7 @@ class TarsSyncService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         syncJob?.cancel()
+        serviceScope.cancel()
     }
 
     private fun createNotificationChannels() {
@@ -90,7 +95,7 @@ class TarsSyncService : Service() {
 
             val fgChannel = NotificationChannel(
                 CHANNEL_FOREGROUND_ID,
-                "TARS Conexión en Segundo Plano",
+                "TARS Conexion en Segundo Plano",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Mantiene a TARS conectado para recibir respuestas al instante"
@@ -124,8 +129,8 @@ class TarsSyncService : Service() {
 
         return NotificationCompat.Builder(this, CHANNEL_FOREGROUND_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle("TARS en línea")
-            .setContentText("Sincronización activa en segundo plano")
+            .setContentTitle("TARS en linea")
+            .setContentText("Sincronizacion activa en segundo plano")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(pendingIntent)
@@ -143,7 +148,7 @@ class TarsSyncService : Service() {
                         pollSync(currentUrl)
                     }
                 } catch (e: Exception) {
-                    // Manejo silencioso de reconexión
+                    // Manejo silencioso de reconexion
                 }
                 delay(2000)
             }
@@ -176,7 +181,7 @@ class TarsSyncService : Service() {
 
         if (hasNew && stepIndex > lastNotifiedIndex && !isProcessing && content.isNotEmpty()) {
             lastNotifiedIndex = stepIndex
-            showIncomingMessageNotification("TARS • Antigravity", content)
+            showIncomingMessageNotification("TARS - Antigravity", content)
         } else if (stepIndex > lastNotifiedIndex && isProcessing) {
             // El modelo sigue respondiendo
         } else if (stepIndex > lastNotifiedIndex && !isProcessing) {
@@ -215,11 +220,15 @@ class TarsSyncService : Service() {
         var conn: HttpURLConnection? = null
         return try {
             val url = URL(urlString)
-            // Seguridad TLS estricta (F-17): exigir HTTPS con verificacion de certificado y hostname estandar
             if (!url.protocol.equals("https", ignoreCase = true)) {
                 return null
             }
-            conn = url.openConnection() as HttpsURLConnection
+            if (!TarsTlsPinning.isAllowedTarsHost(url.host)) {
+                return null
+            }
+            val httpsConn = url.openConnection() as HttpsURLConnection
+            TarsTlsPinning.applyPinnedTls(httpsConn, prefs)
+            conn = httpsConn
 
             conn.connectTimeout = timeoutMs
             conn.readTimeout = timeoutMs

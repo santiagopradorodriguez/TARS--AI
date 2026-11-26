@@ -1,3 +1,15 @@
+(function cleanAuthQueryParams() {
+    try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.has('token') || url.searchParams.has('fp')) {
+            url.searchParams.delete('token');
+            url.searchParams.delete('fp');
+            const clean = url.pathname + (url.search ? url.search : '') + url.hash;
+            window.history.replaceState({}, document.title, clean);
+        }
+    } catch (e) {}
+})();
+
 
 function scrollChatToBottom(force = false) {
     if (!chatContainer) return;
@@ -25,7 +37,7 @@ function updateProcessingBubble(info) {
     if (Array.isArray(info.recent_steps) && info.recent_steps.length > 0) {
         const items = info.recent_steps.map((st, idx) => {
             const isLast = (idx === info.recent_steps.length - 1);
-            const icon = isLast ? '●' : '✓';
+            const icon = isLast ? '>' : 'OK';
             return `<div class="proc-step-item ${isLast ? 'current' : 'done'}">${icon} ${escapeHtml(st)}</div>`;
         }).join('');
         stepsListHtml = `<div class="processing-thought-box">${items}</div>`;
@@ -183,10 +195,10 @@ function showExternalLinkModal(url) {
                     <div id="ext-link-display" style="word-break: break-all; background: rgba(255,255,255,0.06); padding: 10px; border-radius: 8px; font-family: monospace; font-size: 13px; margin-bottom: 16px; color: var(--accent-primary, #60a5fa);"></div>
                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                         <button id="ext-copy-link-btn" class="modal-btn secondary" style="flex: 1; min-width: 130px; padding: 10px; border-radius: 8px; cursor: pointer;">
-                            📋 Copiar enlace
+                            Copiar enlace
                         </button>
                         <button id="ext-open-link-btn" class="modal-btn primary" style="flex: 1; min-width: 130px; padding: 10px; border-radius: 8px; cursor: pointer;">
-                            🌐 Abrir en navegador
+                            Abrir en navegador
                         </button>
                     </div>
                 </div>
@@ -209,8 +221,8 @@ function showExternalLinkModal(url) {
     copyBtn.onclick = async () => {
         try {
             await navigator.clipboard.writeText(url);
-            copyBtn.innerText = '✅ ¡Copiado!';
-            setTimeout(() => { copyBtn.innerText = '📋 Copiar enlace'; }, 2000);
+            copyBtn.innerText = 'Copiado';
+            setTimeout(() => { copyBtn.innerText = 'Copiar enlace'; }, 2000);
             if (typeof showWhatsAppToast === 'function') {
                 showWhatsAppToast('ENLACE COPIADO', 'Pegalo en Chrome para abrirlo.');
             }
@@ -2680,7 +2692,7 @@ async function toggleNotifications() {
         updateNotifyBtnUI(true);
         showWhatsAppToast('TARS Android', 'Notificaciones nativas activadas (sin duplicados de Google).');
         if (typeof window.AndroidBridge.showNotification === 'function') {
-            window.AndroidBridge.showNotification('TARS', '✅ Notificaciones nativas activadas (sin duplicados).');
+            window.AndroidBridge.showNotification('TARS', 'Notificaciones nativas activadas (sin duplicados).');
         }
         return;
     }
@@ -3167,34 +3179,7 @@ class VoiceCallClient {
 
         if (this.audioCtx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
             try {
-                const processorCode = `
-                    class VoiceCallPcmProcessor extends AudioWorkletProcessor {
-                        constructor() {
-                            super();
-                            this._buffer = [];
-                            this._chunkSize = 1024;
-                        }
-                        process(inputs) {
-                            const input = inputs[0];
-                            if (input && input[0] && input[0].length > 0) {
-                                const channel = input[0];
-                                for (let i = 0; i < channel.length; i++) {
-                                    this._buffer.push(channel[i]);
-                                }
-                                if (this._buffer.length >= this._chunkSize) {
-                                    const out = new Float32Array(this._buffer);
-                                    this._buffer = [];
-                                    this.port.postMessage(out, [out.buffer]);
-                                }
-                            }
-                            return true;
-                        }
-                    }
-                    registerProcessor('voice-call-pcm-processor', VoiceCallPcmProcessor);
-                `;
-                const blob = new Blob([processorCode], { type: 'application/javascript' });
-                this.workletUrl = URL.createObjectURL(blob);
-                await this.audioCtx.audioWorklet.addModule(this.workletUrl);
+                await this.audioCtx.audioWorklet.addModule('/static/voice_call_worklet.js?v=8.2');
 
                 const workletNode = new AudioWorkletNode(this.audioCtx, 'voice-call-pcm-processor');
                 workletNode.port.onmessage = (event) => {

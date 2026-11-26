@@ -200,6 +200,28 @@ def _create_verified_ssl_context():
     return ctx
 
 
+def get_cert_sha256_fingerprint(cert_path=None):
+    target = cert_path or CERT_FILE
+    try:
+        if not target or not os.path.isfile(target):
+            return ""
+        with open(target, "r", encoding="utf-8") as fh:
+            pem_data = fh.read()
+        der_bytes = ssl.PEM_cert_to_DER_cert(pem_data)
+        return hashlib.sha256(der_bytes).hexdigest().lower()
+    except Exception:
+        return ""
+
+
+def _build_qr_query(token, cert_fp=""):
+    params = []
+    if token:
+        params.append(f"token={token}")
+    if cert_fp:
+        params.append(f"fp={cert_fp}")
+    return ("/?" + "&".join(params)) if params else "" 
+
+
 def _is_allowed_remote_host(host_str):
     host = str(host_str or "").strip().lower()
     if not host or any(c in host for c in " /\\@:?#\r\n"):
@@ -3563,7 +3585,8 @@ async def handle_get_connection_mode(request):
         local_url = f"https://{loc_ip}:{port}" if loc_ip else ""
         tailscale_url = f"https://{magic_dns}:{port}" if magic_dns else (f"https://{ts_ip}:{port}" if ts_ip else "")
         tok = get_auth_token()
-        q = f"/?token={tok}" if tok else ""
+        cert_fp = get_cert_sha256_fingerprint()
+        q = _build_qr_query(tok, cert_fp)
         qr_local = await asyncio.to_thread(generate_qr_data_url, f"{local_url}{q}" if local_url else "")
         qr_tailscale = await asyncio.to_thread(generate_qr_data_url, f"{tailscale_url}{q}" if tailscale_url else "")
         return web.json_response({
@@ -3574,6 +3597,7 @@ async def handle_get_connection_mode(request):
             "tailscale_magicdns": magic_dns,
             "local_url": local_url,
             "tailscale_url": tailscale_url,
+            "cert_fingerprint": cert_fp,
             "qr_local": qr_local,
             "qr_tailscale": qr_tailscale
         })
@@ -4324,7 +4348,11 @@ def _find_antigravity_voice_ws_url(target_chat_id=None):
             url = t.get("url", "")
             ws_url = t.get("webSocketDebuggerUrl")
             if ws_url and target_chat_id in url:
-                return ws_url
+                res = eval_in_antigravity(js_probe, ws_url=ws_url)
+                if isinstance(res, dict) and (res.get("active") or res.get("has_start")):
+                    return ws_url
+                if not fallback_url:
+                    fallback_url = ws_url
     for t in targets:
         title = t.get("title", "")
         url = t.get("url", "")
@@ -4405,7 +4433,7 @@ def antigravity_voice_call_start(target_chat_id=None):
 
     for _ in range(10):
         time.sleep(0.25)
-        status = antigravity_voice_call_status()
+        status = antigravity_voice_call_status(target_chat_id=target_chat_id)
         if status.get("active"):
             return {"success": True, **status}
 
@@ -4443,7 +4471,7 @@ def antigravity_voice_call_stop(target_chat_id=None):
 
     for _ in range(10):
         time.sleep(0.25)
-        status = antigravity_voice_call_status()
+        status = antigravity_voice_call_status(target_chat_id=target_chat_id)
         if status.get("ok") and not status.get("active"):
             return {"success": True, **status}
 
@@ -4461,7 +4489,8 @@ async def handle_voice_call_status(request):
             rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/voice_call/status", "GET")
             if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
                 return web.json_response(rem_res)
-        res = await asyncio.to_thread(antigravity_voice_call_status)
+        target_chat_id = request.query.get("chat_id", "").strip() or None
+        res = await asyncio.to_thread(antigravity_voice_call_status, target_chat_id)
         return web.json_response(res)
     except Exception as e:
         return web.json_response({"ok": False, "active": False, "error": str(e)}, status=500)
@@ -4473,7 +4502,9 @@ async def handle_voice_call_start(request):
             rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/voice_call/start", "POST", {})
             if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
                 return web.json_response(rem_res)
-        res = await asyncio.to_thread(antigravity_voice_call_start)
+        body = await request.json() if request.can_read_body else {}
+        target_chat_id = (body.get("chat_id") if isinstance(body, dict) else None) or request.query.get("chat_id", "").strip() or None
+        res = await asyncio.to_thread(antigravity_voice_call_start, target_chat_id)
         return web.json_response(res)
     except Exception as e:
         return web.json_response({"success": False, "ok": False, "active": False, "error": str(e)}, status=500)
@@ -4485,7 +4516,9 @@ async def handle_voice_call_stop(request):
             rem_res = await asyncio.to_thread(remote_api_request, rem_ip, "/api/voice_call/stop", "POST", {})
             if isinstance(rem_res, dict) and not rem_res.get("_proxy_error"):
                 return web.json_response(rem_res)
-        res = await asyncio.to_thread(antigravity_voice_call_stop)
+        body = await request.json() if request.can_read_body else {}
+        target_chat_id = (body.get("chat_id") if isinstance(body, dict) else None) or request.query.get("chat_id", "").strip() or None
+        res = await asyncio.to_thread(antigravity_voice_call_stop, target_chat_id)
         return web.json_response(res)
     except Exception as e:
         return web.json_response({"success": False, "ok": False, "active": False, "error": str(e)}, status=500)
@@ -4564,8 +4597,13 @@ async def handle_ws_voice_call(request):
             print(f"[TARS VoiceCall] Puente PipeWire listo: {setup_info}")
 
             start_res = await asyncio.to_thread(antigravity_voice_call_start, target_chat_id)
-            voice_started = True
+            voice_started = bool(start_res.get("success") or start_res.get("active"))
             print(f"[TARS VoiceCall] Voice Mode start: {start_res}")
+            if not voice_started:
+                err_msg = start_res.get("error") or "No se pudo iniciar Voice Mode en Antigravity"
+                if not ws.closed:
+                    await ws.send_json({"type": "error", "error": err_msg})
+                return ws
 
             route_res = await asyncio.to_thread(bridge.route_antigravity_audio)
             print(f"[TARS VoiceCall] Enrutamiento inicial de audio: {route_res}")
@@ -4658,41 +4696,46 @@ def init_app():
             else:
                 resp = await handler(request)
                 q_tok = request.query.get("token", "").strip()
-                if request.path == "/" and q_tok and hmac.compare_digest(q_tok, get_auth_token()):
-                    resp.set_cookie(
-                        "tars_token",
-                        q_tok,
-                        httponly=True,
-                        secure=True,
-                        samesite="Strict",
-                        path="/"
-                    )
+                if not resp.prepared:
+                    q_tok = request.query.get("token", "").strip()
+                    if request.path == "/" and q_tok and hmac.compare_digest(q_tok, get_auth_token()):
+                        resp.set_cookie(
+                            "tars_token",
+                            q_tok,
+                            httponly=True,
+                            secure=True,
+                            samesite="Strict",
+                            max_age=30 * 24 * 3600,
+                            path="/"
+                        )
 
-        if allowed_origin:
-            resp.headers["Access-Control-Allow-Origin"] = allowed_origin
-            resp.headers["Vary"] = "Origin"
-            resp.headers["Access-Control-Allow-Credentials"] = "true"
-            resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-            resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-TARS-Token"
+        if not resp.prepared:
+            if allowed_origin:
+                resp.headers["Access-Control-Allow-Origin"] = allowed_origin
+                resp.headers["Vary"] = "Origin"
+                resp.headers["Access-Control-Allow-Credentials"] = "true"
+                resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+                resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-TARS-Token"
 
-        resp.headers["X-Content-Type-Options"] = "nosniff"
-        resp.headers["X-Frame-Options"] = "DENY"
-        resp.headers["Referrer-Policy"] = "no-referrer"
-        resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        resp.headers["Content-Security-Policy"] = (
-            "default-src 'self'; "
-            "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: blob:; "
-            "media-src 'self' blob:; "
-            "connect-src 'self' wss: https:; "
-            "frame-ancestors 'none'; "
-            "base-uri 'self'"
-        )
+            resp.headers["X-Content-Type-Options"] = "nosniff"
+            resp.headers["X-Frame-Options"] = "DENY"
+            resp.headers["Referrer-Policy"] = "no-referrer"
+            resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+            resp.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "worker-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob:; "
+                "media-src 'self' blob:; "
+                "connect-src 'self' wss: https:; "
+                "frame-ancestors 'none'; "
+                "base-uri 'self'"
+            )
 
-        if request.path.startswith("/static/") or request.path in ("/", "/sw.js", "/manifest.json"):
-            resp.headers["Cache-Control"] = "no-cache, must-revalidate"
-            resp.headers["Pragma"] = "no-cache"
+            if request.path.startswith("/static/") or request.path in ("/", "/sw.js", "/manifest.json"):
+                resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+                resp.headers["Pragma"] = "no-cache"
         return resp
 
     async def handle_health(request):
@@ -4750,7 +4793,7 @@ def init_app():
 def get_local_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(("10.254.254.254", 1))
+        s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
     except Exception:
         ip = "127.0.0.1"
@@ -4779,7 +4822,8 @@ def get_tailscale_magicdns():
         pass
     return None
 
-def print_connection_qr(url):
+def print_connection_qr(url, display_url=None):
+    safe_label = display_url or url.split("?", 1)[0]
     try:
         import qrcode
         qr = qrcode.QRCode(border=1)
@@ -4789,10 +4833,10 @@ def print_connection_qr(url):
         print("   CONECTAR DESDE EL CELULAR (ESCANEA EL CODIGO QR):")
         print("=" * 52)
         qr.print_ascii(invert=True)
-        print(f" URL: {url}")
+        print(f" URL: {safe_label} (token y huella TLS embebidos en el QR)")
         print("=" * 52 + "\n")
     except Exception:
-        print(f"[TARS Web] Acceso movil disponible en: {url}")
+        print(f"[TARS Web] Acceso movil disponible en: {safe_label}")
 
 def ensure_ssl_certificates(local_ip, tailscale_ip=None):
     os.makedirs(CERTS_DIR, exist_ok=True)
@@ -4805,6 +4849,10 @@ def ensure_ssl_certificates(local_ip, tailscale_ip=None):
             cmd = ["tailscale", "cert", "--cert-file", CERT_FILE, "--key-file", KEY_FILE, magic_dns]
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
             if res.returncode == 0 and os.path.exists(CERT_FILE) and os.path.exists(KEY_FILE):
+                try:
+                    os.chmod(KEY_FILE, 0o600)
+                except OSError:
+                    pass
                 print(f"[TARS Web] Certificado SSL oficial Let's Encrypt generado exitosamente para {magic_dns}")
                 return
         except Exception as e:
@@ -5042,19 +5090,20 @@ async def async_main():
             primary_url = f"https://{local_ip}:{port}"
 
         host_label = socket.gethostname().lower()
-        print(f"[TARS Web] SSL + Auto-Redirect HTTP->HTTPS habilitado en puerto {port} (y HTTP en {http_port}):")
+        print(f"[TARS Web] HTTPS + Auto-Redirect HTTP->HTTPS habilitado en puerto {port}:")
         if magic_dns:
             print(f"           - https://{magic_dns}:{port} (SSL Oficial Let's Encrypt - PWA)")
         print(f"           - https://{local_ip}:{port}")
         print(f"           - https://{host_label}.local:{port}")
         if ts_ip:
             print(f"           - https://{ts_ip}:{port} (Remoto Tailscale)")
-            print(f"           - http://{ts_ip}:{http_port} (HTTP directo)")
 
         auth_token = get_auth_token()
+        cert_fp = get_cert_sha256_fingerprint()
         print(f"[TARS Web] Autenticacion Bearer habilitada (archivo: {AUTH_TOKEN_FILE}, permisos 0600).")
         if primary_url:
-            print_connection_qr(f"{primary_url}/?token={auth_token}")
+            q = _build_qr_query(auth_token, cert_fp)
+            print_connection_qr(f"{primary_url}{q}", display_url=primary_url)
 
         await server_8443.serve_forever()
     else:
