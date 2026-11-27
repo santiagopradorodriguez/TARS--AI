@@ -149,10 +149,11 @@ class TarsQRDialog(QDialog):
             QTabBar::tab {
                 background: #0f172a;
                 color: #94a3b8;
-                padding: 8px 14px;
+                padding: 8px 10px;
                 margin-right: 4px;
                 border-top-left-radius: 6px;
                 border-top-right-radius: 6px;
+                font-size: 12px;
                 font-weight: bold;
             }
             QTabBar::tab:selected {
@@ -196,6 +197,7 @@ class TarsQRDialog(QDialog):
         layout.addWidget(sub)
 
         self.tabs = QTabWidget()
+        self.tabs.tabBar().setExpanding(True)
         layout.addWidget(self.tabs)
 
         self.info = get_connection_info()
@@ -293,14 +295,26 @@ class TarsQRDialog(QDialog):
     def activate_tailscale(self):
         try:
             self.ts_feedback.setText("Conectando con Tailscale...")
-            subprocess.run(["tailscale", "up", "--operator=" + (os.environ.get("USER") or getpass.getuser())], capture_output=True, text=True, timeout=5)
+            QApplication.processEvents()
+            res = subprocess.run(
+                ["tailscale", "up", "--timeout=4s"],
+                capture_output=True, text=True, timeout=6
+            )
             self.info = get_connection_info()
-            # Recrear tab tailscale
-            while self.tab_tailscale.layout().count():
-                child = self.tab_tailscale.layout().takeAt(0)
-                if child.widget():
-                    child.widget().deleteLater()
-            self.setup_tailscale_tab()
+            if self.info.get("tailscale_state") == "Running" and self.info.get("tailscale_url"):
+                while self.tab_tailscale.layout().count():
+                    child = self.tab_tailscale.layout().takeAt(0)
+                    if child.widget():
+                        child.widget().deleteLater()
+                self.setup_tailscale_tab()
+            else:
+                err = (res.stderr or res.stdout or "").strip()
+                if "timeout" in err.lower() or res.returncode != 0:
+                    self.ts_feedback.setText("No se pudo conectar: tu red Wi-Fi actual puede estar bloqueando Tailscale o falta iniciar sesion.")
+                else:
+                    self.ts_feedback.setText(f"Estado actual: {self.info.get('tailscale_state')}")
+        except subprocess.TimeoutExpired:
+            self.ts_feedback.setText("Tiempo agotado: tu red Wi-Fi actual puede estar bloqueando Tailscale.")
         except Exception as e:
             self.ts_feedback.setText(f"Error al conectar: {e}")
 
