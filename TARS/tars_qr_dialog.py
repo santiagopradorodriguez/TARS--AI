@@ -285,6 +285,7 @@ class TarsQRDialog(QDialog):
             v.addWidget(btn_activate, alignment=Qt.AlignCenter)
 
             self.ts_feedback = QLabel("")
+            self.ts_feedback.setWordWrap(True)
             self.ts_feedback.setStyleSheet("font-size: 11px; color: #38bdf8;")
             self.ts_feedback.setAlignment(Qt.AlignCenter)
             v.addWidget(self.ts_feedback)
