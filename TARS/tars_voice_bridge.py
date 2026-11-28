@@ -268,12 +268,16 @@ class PipeWireVoiceBridge:
                 if current_sink in (target_speaker_idx, target_mic_sink_idx):
                     continue
                 if not self._matches_antigravity(sink_input, client_map):
+                    props = sink_input.get("properties") or {}
+                    print(f"[TARS VoiceBridge] Ignorado sink-input {idx}: app={props.get('application.name')} bin={props.get('application.process.binary')}")
                     continue
 
                 if idx not in self._saved_sink_inputs and current_sink is not None:
                     self._saved_sink_inputs[idx] = current_sink
                 try:
                     self._run_pactl(["move-sink-input", str(idx), self.speaker_sink_name], check=True)
+                    self._run_pactl(["set-sink-input-mute", str(idx), "0"], check=False)
+                    self._run_pactl(["set-sink-input-volume", str(idx), "100%"], check=False)
                     moved_sink_inputs.append(idx)
                     logger.info("sink-input %d movido a %s", idx, self.speaker_sink_name)
                 except subprocess.CalledProcessError as exc:
@@ -294,6 +298,7 @@ class PipeWireVoiceBridge:
                     self._saved_source_outputs[idx] = current_source
                 try:
                     self._run_pactl(["move-source-output", str(idx), self.mic_source_name], check=True)
+                    self._run_pactl(["set-source-output-mute", str(idx), "0"], check=False)
                     moved_source_outputs.append(idx)
                     logger.info("source-output %d movido a %s", idx, self.mic_source_name)
                 except subprocess.CalledProcessError as exc:

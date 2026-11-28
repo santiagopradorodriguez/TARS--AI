@@ -4560,12 +4560,16 @@ async def handle_ws_voice_call(request):
 
         async def _forward_speaker_to_ws():
             stream = bridge.iter_speaker_stream()
+            logged_audio = 0
             try:
                 async for chunk in stream:
                     if not chunk:
                         continue
                     if ws.closed:
                         break
+                    if logged_audio < 5 and any(chunk):
+                        logged_audio += 1
+                        print(f"[TARS VoiceCall] Enviando audio no-silencio #{logged_audio} ({len(chunk)} bytes) al celular")
                     await ws.send_bytes(chunk)
             finally:
                 await stream.aclose()
