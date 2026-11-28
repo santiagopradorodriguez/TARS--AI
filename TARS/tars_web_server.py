@@ -4586,11 +4586,13 @@ async def handle_ws_voice_call(request):
                     break
 
         async def _delayed_reroute():
-            await asyncio.sleep(1.0)
-            if not bridge.is_active:
-                return
-            res_retry = await asyncio.to_thread(bridge.route_antigravity_audio)
-            print(f"[TARS VoiceCall] Re-intento de enrutamiento de audio (+1s): {res_retry}")
+            while bridge.is_active and not ws.closed:
+                await asyncio.sleep(2.0)
+                if not bridge.is_active or ws.closed:
+                    break
+                res_retry = await asyncio.to_thread(bridge.route_antigravity_audio)
+                if res_retry.get("moved_sink_inputs") or res_retry.get("moved_source_outputs"):
+                    print(f"[TARS VoiceCall] Re-enrutamiento dinamico de audio: {res_retry}")
 
         try:
             setup_info = await asyncio.to_thread(bridge.setup)
